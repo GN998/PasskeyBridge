@@ -34,7 +34,7 @@ class BridgeSessionController(
     }
     
     // Step 2: Hardcoded hash verification spike to validate Privileged API behavior
-    suspend fun runStep2HashVerificationSpike() {
+    suspend fun runStep2HashVerificationSpike(): String {
         Log.d("Step2Spike", "Starting Privileged API hash verification spike...")
         
         // Hardcode a 32-byte fixed clientDataHash to test provider signature logic
@@ -49,13 +49,10 @@ class BridgeSessionController(
         Log.d("Step2Spike", "Dispatching GetAssertion with fixed clientDataHash...")
         val response = proxy.handleCtapRequest(req)
         
-        if (response is Ctap2Response.GetAssertionResponse) {
-            Log.d("Step2Spike", "Assertion received successfully.")
-            Log.d("Step2Spike", "Signature length: ${response.signature.size} bytes.")
-            Log.d("Step2Spike", "Proceeding to cryptographic verification against fixedHash.")
-            // Note: Independent cryptographic verification logic will assert this signature here.
+        return if (response is Ctap2Response.GetAssertionResponse) {
+            "SUCCESS!\nAssertion received.\nSignature length: ${response.signature.size} bytes.\n\nAction Required: Verify this signature against the fixed 32-byte 0x5A hash in your Provider."
         } else {
-            Log.e("Step2Spike", "Failed to get assertion. Response: $response")
+            "FAILED!\nResponse: $response\n(Hint: Check Provider whitelist or CredentialManager state)"
         }
     }
 
