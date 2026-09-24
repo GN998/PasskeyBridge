@@ -32,6 +32,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="fido" />
+                <data android:scheme="FIDO" />
             </intent-filter>
         </activity>
     </application>
