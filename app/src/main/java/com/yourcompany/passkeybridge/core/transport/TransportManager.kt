@@ -6,7 +6,7 @@ import com.yourcompany.passkeybridge.core.transport.websocket.TunnelWebsocket
 
 class TransportManager(
     private val bleAdvertiser: HybridBleAdvertiser,
-    private val tunnelId: Int = 266
+    private val tunnelId: Int = BuildConfig.TUNNEL_ID
 ) {
     private val noiseSession = NoiseSession()
     private var tunnelWebsocket: TunnelWebsocket? = null

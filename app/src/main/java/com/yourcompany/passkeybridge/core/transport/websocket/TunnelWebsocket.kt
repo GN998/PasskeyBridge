@@ -6,7 +6,7 @@ import okhttp3.*
 import okio.ByteString
 
 class TunnelWebsocket(
-    private val tunnelId: Int = 266,
+    private val tunnelId: Int = BuildConfig.TUNNEL_ID,
     private val onMessageReceived: (ByteArray) -> Unit
 ) {
     private val client = OkHttpClient()
