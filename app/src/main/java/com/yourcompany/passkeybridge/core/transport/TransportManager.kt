@@ -1,5 +1,6 @@
 package com.yourcompany.passkeybridge.core.transport
 
+import com.yourcompany.passkeybridge.BuildConfig
 import com.yourcompany.passkeybridge.core.transport.ble.HybridBleAdvertiser
 import com.yourcompany.passkeybridge.core.transport.noise.NoiseSession
 import com.yourcompany.passkeybridge.core.transport.websocket.TunnelWebsocket

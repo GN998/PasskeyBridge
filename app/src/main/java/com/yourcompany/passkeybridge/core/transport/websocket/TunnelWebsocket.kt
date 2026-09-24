@@ -1,5 +1,6 @@
 package com.yourcompany.passkeybridge.core.transport.websocket
 
+import com.yourcompany.passkeybridge.BuildConfig
 import android.util.Log
 import com.yourcompany.passkeybridge.core.security.DomainDerivation
 import okhttp3.*

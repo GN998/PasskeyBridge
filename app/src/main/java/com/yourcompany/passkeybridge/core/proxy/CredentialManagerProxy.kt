@@ -33,7 +33,7 @@ class CredentialManagerProxy(private val context: Context) {
         val option = GetPublicKeyCredentialOption(
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash,
-            origin = trustedOrigin
+            // origin = trustedOrigin
         )
         val getReq = GetCredentialRequest.Builder().addCredentialOption(option).build()
 
@@ -60,7 +60,7 @@ class CredentialManagerProxy(private val context: Context) {
         val createReq = CreatePublicKeyCredentialRequest(
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash,
-            origin = trustedOrigin,
+            // origin = trustedOrigin,
             preferImmediatelyAvailableCredentials = false,
             isAutoSelectAllowed = false
         )
