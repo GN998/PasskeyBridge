@@ -48,7 +48,10 @@ class BridgeSessionController(
             userId = byteArrayOf(1, 2, 3, 4),
             userName = "testuser",
             userDisplayName = "Test User",
-            pubKeyCredParams = emptyList()
+            pubKeyCredParams = listOf(
+                mapOf("type" to "public-key", "alg" to -7),
+                mapOf("type" to "public-key", "alg" to -257)
+            )
         )
         
         Log.d("Step2Spike", "Dispatching MakeCredential with fixed clientDataHash...")

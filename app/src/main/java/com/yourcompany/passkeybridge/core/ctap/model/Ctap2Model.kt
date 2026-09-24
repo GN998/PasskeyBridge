@@ -17,7 +17,7 @@ sealed class Ctap2Request {
         val userId: ByteArray,
         val userName: String,
         val userDisplayName: String,
-        val pubKeyCredParams: List<Map<String, Int>> = emptyList()
+        val pubKeyCredParams: List<Map<String, Any>> = emptyList()
     ) : Ctap2Request()
 }
 
