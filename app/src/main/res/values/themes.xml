@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Corresponding theme declaration in Manifest -->
+    <style name="Theme.Material3.DayNight" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Minimal theme configuration -->
+    </style>
+</resources>
