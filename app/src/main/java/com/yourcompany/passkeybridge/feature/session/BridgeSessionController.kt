@@ -46,43 +46,4 @@ class BridgeSessionController(
             responseBytes
         }
     }
-    
-    // Step 2: Hardcoded hash verification spike to validate Privileged API behavior
-    suspend fun runStep2HashVerificationSpike(): String {
-        Log.d("Step2Spike", "Starting Privileged API hash verification spike (MakeCredential)...")
-        
-        // Hardcode a 32-byte fixed clientDataHash to test provider signature logic
-        val fixedHash = ByteArray(32) { 0x5A } 
-        
-        // Fix: Pass emptyList() for pubKeyCredParams to match List<Map<String, Int>> model type
-        val req = Ctap2Request.MakeCredential(
-            clientDataHash = fixedHash,
-            rpId = "example.com",
-            rpName = "Example RP",
-            userId = byteArrayOf(1, 2, 3, 4),
-            userName = "testuser",
-            userDisplayName = "Test User",
-            pubKeyCredParams = listOf(
-                mapOf("type" to "public-key", "alg" to -7),
-                mapOf("type" to "public-key", "alg" to -257)
-            )
-        )
-        
-        Log.d("Step2Spike", "Dispatching MakeCredential with fixed clientDataHash...")
-        val response = proxy.handleCtapRequest(req)
-        
-        return if (response is Ctap2Response.MakeCredentialResponse) {
-            "SUCCESS!\nCredential Created.\nFMT: ${response.fmt}\nAuthData length: ${response.authData.size} bytes\nAttStmt Keys: ${response.attStmt.keys}\n\nCBOR Decoding Passed!"
-        } else {
-            "FAILED!\nResponse: $response"
-        }
-    }
-
-    private fun parseRawCtapToRequest(raw: ByteArray): Ctap2Request {
-        return Ctap2Request.GetInfo(true)
-    }
-    
-    private fun encodeResponseToRawCtap(response: Ctap2Response): ByteArray {
-        return byteArrayOf(0x00)
-    }
 }
