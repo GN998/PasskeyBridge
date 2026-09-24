@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
     <!-- Note: CAMERA permission removed for Step 1 -->
 
     <application
