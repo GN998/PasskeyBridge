@@ -6,7 +6,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-// Load local.properties for local development (if present)
 val localProperties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
@@ -14,14 +13,12 @@ val localProperties = Properties().apply {
     }
 }
 
-// Filter out empty strings using takeIf { it.isNotBlank() } so fallbacks work correctly
 val rawTunnelId = System.getenv("CUSTOM_TUNNEL_ID")?.takeIf { it.isNotBlank() }
     ?: localProperties.getProperty("TUNNEL_ID")?.takeIf { it.isNotBlank() }
-    ?: throw GradleException("Build failed: TUNNEL_ID is not specified! Please set CUSTOM_TUNNEL_ID in GitHub secrets/vars or TUNNEL_ID in local.properties.")
+    ?: throw GradleException("Build failed: TUNNEL_ID is not specified!")
 
-// Ensure the value is a valid integer
 val tunnelId = rawTunnelId.toIntOrNull()
-    ?: throw GradleException("Build failed: TUNNEL_ID must be a valid integer. Received: '$rawTunnelId'")
+    ?: throw GradleException("Build failed: TUNNEL_ID must be a valid integer.")
 
 println("--> [Gradle Build Config] Successfully resolved TUNNEL_ID: $tunnelId")
 
@@ -37,8 +34,6 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // Inject validated tunnel ID into BuildConfig
         buildConfigField("int", "TUNNEL_ID", "$tunnelId")
     }
 
@@ -85,9 +80,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // CameraX & ZXing
-    implementation("androidx.camera:camera-camera2:1.3.3")
-    implementation("androidx.camera:camera-lifecycle:1.3.3")
-    implementation("androidx.camera:camera-view:1.3.3")
-    implementation("com.google.zxing:core:3.5.3")
+    // Note: CameraX & ZXing dependencies removed for Step 1 (External FIDO URI integration)
 }

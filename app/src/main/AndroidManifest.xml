@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Note: CAMERA permission removed for Step 1 -->
 
     <application
         android:name=".BridgeApplication"
@@ -17,12 +17,21 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.DayNight">
 
+        <!-- Replaced QrScannerActivity with FidoUriHandlerActivity -->
         <activity
-            android:name=".feature.scanner.QrScannerActivity"
+            android:name=".feature.uri.FidoUriHandlerActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            
+            <!-- Intercept FIDO URIs via ACTION_VIEW -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fido" />
             </intent-filter>
         </activity>
     </application>
