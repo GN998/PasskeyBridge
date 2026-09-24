@@ -10,7 +10,7 @@ object HybridQrParser {
             version = 1,
             publicKey = ByteArray(0),
             secret = ByteArray(0),
-            tunnelServerId = 256
+            tunnelServerId = 267
         )
     }
 }
