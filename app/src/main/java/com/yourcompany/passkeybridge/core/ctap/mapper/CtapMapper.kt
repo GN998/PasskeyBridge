@@ -61,11 +61,15 @@ object CtapMapper {
 
     fun parseMakeCredentialResponseJson(jsonResponseStr: String): Ctap2Response.MakeCredentialResponse {
         val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
-        val attestationObject = CryptoUtils.decodeBase64Url(responseObj.getString("attestationObject"))
+        val attestationObjectBytes = CryptoUtils.decodeBase64Url(responseObj.getString("attestationObject"))
+        
+        // Fix: Decode the CBOR attestationObject into fmt, authData, and attStmt
+        val map = com.yourcompany.passkeybridge.core.ctap.codec.CtapCodec.SimpleCbor.read(attestationObjectBytes) as Map<*, *>
+        
         return Ctap2Response.MakeCredentialResponse(
-            fmt = "none",
-            authData = attestationObject,
-            attStmt = emptyMap()
+            fmt = map["fmt"] as String,
+            authData = map["authData"] as ByteArray,
+            attStmt = map["attStmt"] as Map<*, *>
         )
     }
 }

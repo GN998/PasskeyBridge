@@ -72,7 +72,7 @@ class BridgeSessionController(
         val response = proxy.handleCtapRequest(req)
         
         return if (response is Ctap2Response.MakeCredentialResponse) {
-            "SUCCESS!\nCredential Created.\nAuthData length: ${response.authData.size} bytes.\n\nAction Required: Verify signature against the 0x5A hash in Provider."
+            "SUCCESS!\nCredential Created.\nFMT: ${response.fmt}\nAuthData length: ${response.authData.size} bytes\nAttStmt Keys: ${response.attStmt.keys}\n\nCBOR Decoding Passed!"
         } else {
             "FAILED!\nResponse: $response"
         }

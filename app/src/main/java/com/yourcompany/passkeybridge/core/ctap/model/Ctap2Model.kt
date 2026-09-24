@@ -46,7 +46,8 @@ sealed class Ctap2Response {
     data class MakeCredentialResponse(
         val fmt: String = "none",
         val authData: ByteArray,
-        val attStmt: Map<String, String> = emptyMap()
+        // Fix: Use Map<*, *> to support nested CBOR elements (like ByteArray signatures)
+        val attStmt: Map<*, *> = emptyMap<Any, Any>()
     ) : Ctap2Response()
 
     data class ErrorResponse(val errorCode: Byte) : Ctap2Response()
