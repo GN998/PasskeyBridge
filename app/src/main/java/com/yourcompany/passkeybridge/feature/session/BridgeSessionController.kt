@@ -35,24 +35,29 @@ class BridgeSessionController(
     
     // Step 2: Hardcoded hash verification spike to validate Privileged API behavior
     suspend fun runStep2HashVerificationSpike(): String {
-        Log.d("Step2Spike", "Starting Privileged API hash verification spike...")
+        Log.d("Step2Spike", "Starting Privileged API hash verification spike (MakeCredential)...")
         
         // Hardcode a 32-byte fixed clientDataHash to test provider signature logic
         val fixedHash = ByteArray(32) { 0x5A } 
         
-        val req = Ctap2Request.GetAssertion(
-            rpId = "example.com",
+        // Fix: Pass emptyList() for pubKeyCredParams to match List<Map<String, Int>> model type
+        val req = Ctap2Request.MakeCredential(
             clientDataHash = fixedHash,
-            allowList = null
+            rpId = "example.com",
+            rpName = "Example RP",
+            userId = byteArrayOf(1, 2, 3, 4),
+            userName = "testuser",
+            userDisplayName = "Test User",
+            pubKeyCredParams = emptyList()
         )
         
-        Log.d("Step2Spike", "Dispatching GetAssertion with fixed clientDataHash...")
+        Log.d("Step2Spike", "Dispatching MakeCredential with fixed clientDataHash...")
         val response = proxy.handleCtapRequest(req)
         
-        return if (response is Ctap2Response.GetAssertionResponse) {
-            "SUCCESS!\nAssertion received.\nSignature length: ${response.signature.size} bytes.\n\nAction Required: Verify this signature against the fixed 32-byte 0x5A hash in your Provider."
+        return if (response is Ctap2Response.MakeCredentialResponse) {
+            "SUCCESS!\nCredential Created.\nAuthData length: ${response.authData.size} bytes.\n\nAction Required: Verify signature against the 0x5A hash in Provider."
         } else {
-            "FAILED!\nResponse: $response\n(Hint: Check Provider whitelist or CredentialManager state)"
+            "FAILED!\nResponse: $response"
         }
     }
 

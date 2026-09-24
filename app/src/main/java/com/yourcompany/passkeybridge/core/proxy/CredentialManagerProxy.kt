@@ -7,8 +7,6 @@ import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.PublicKeyCredential
-import androidx.credentials.exceptions.GetCredentialException
-import androidx.credentials.exceptions.CreateCredentialException
 import com.yourcompany.passkeybridge.core.ctap.AuthenticatorInfo
 import com.yourcompany.passkeybridge.core.ctap.mapper.CtapMapper
 import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Request
@@ -27,28 +25,27 @@ class CredentialManagerProxy(private val context: Context) {
 
     private suspend fun handleGetAssertion(req: Ctap2Request.GetAssertion): Ctap2Response {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
-        val trustedOrigin = "https://${req.rpId}" // Temporary fallback origin, can be resolved from hybrid context later
+        val trustedOrigin = "https://${req.rpId}"
 
-        // Fix: Explicitly pass raw clientDataHash and origin using privileged API
         val option = GetPublicKeyCredentialOption(
             requestJson = jsonRequest,
-            clientDataHash = req.clientDataHash,
-            // origin = trustedOrigin
+            clientDataHash = req.clientDataHash
         )
-        val getReq = GetCredentialRequest.Builder().addCredentialOption(option).build()
+        // Fix: Call setOrigin on GetCredentialRequest.Builder instead of option
+        val getReq = GetCredentialRequest.Builder()
+            .addCredentialOption(option)
+            .setOrigin(trustedOrigin)
+            .build()
 
-        return try {
-            val result = credentialManager.getCredential(context, getReq)
-            if (result.credential is PublicKeyCredential) {
-                val pubKeyCredential = result.credential as PublicKeyCredential
-                val responseJson = pubKeyCredential.authenticationResponseJson
-                val credId = req.allowList?.firstOrNull()?.id ?: ByteArray(0)
-                CtapMapper.parseAssertionResponseJson(responseJson, credId)
-            } else {
-                Ctap2Response.ErrorResponse(0x31)
-            }
-        } catch (e: GetCredentialException) {
-            Ctap2Response.ErrorResponse(0x27)
+        // Removed try-catch to let the Spike UI catch and print exact errors (e.g. NoCredentialException)
+        val result = credentialManager.getCredential(context, getReq)
+        if (result.credential is PublicKeyCredential) {
+            val pubKeyCredential = result.credential as PublicKeyCredential
+            val responseJson = pubKeyCredential.authenticationResponseJson
+            val credId = req.allowList?.firstOrNull()?.id ?: ByteArray(0)
+            return CtapMapper.parseAssertionResponseJson(responseJson, credId)
+        } else {
+            return Ctap2Response.ErrorResponse(0x31)
         }
     }
 
@@ -60,21 +57,17 @@ class CredentialManagerProxy(private val context: Context) {
         val createReq = CreatePublicKeyCredentialRequest(
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash,
-            // origin = trustedOrigin,
-            preferImmediatelyAvailableCredentials = false,
-            isAutoSelectAllowed = false
+            origin = trustedOrigin, // Ensure this is explicitly set
+            preferImmediatelyAvailableCredentials = false
         )
 
-        return try {
-            val result = credentialManager.createCredential(context, createReq)
-            if (result is CreatePublicKeyCredentialResponse) {
-                val responseJson = result.registrationResponseJson
-                CtapMapper.parseMakeCredentialResponseJson(responseJson)
-            } else {
-                Ctap2Response.ErrorResponse(0x31)
-            }
-        } catch (e: CreateCredentialException) {
-            Ctap2Response.ErrorResponse(0x27)
+        // Removed try-catch to let the Spike UI catch and print exact API or Permission errors
+        val result = credentialManager.createCredential(context, createReq)
+        if (result is CreatePublicKeyCredentialResponse) {
+            val responseJson = result.registrationResponseJson
+            return CtapMapper.parseMakeCredentialResponseJson(responseJson)
+        } else {
+            return Ctap2Response.ErrorResponse(0x31)
         }
     }
 }
