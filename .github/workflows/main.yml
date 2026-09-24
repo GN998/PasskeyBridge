@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Release APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -39,7 +39,7 @@ jobs:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       # ==========================================
-      # 2. Build Process (Using system Gradle directly)
+      # 2. Build Process (Release)
       # ==========================================
       # Decode Base64 keystore to file before build
       - name: Decode Keystore
@@ -48,7 +48,8 @@ jobs:
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > my-release-key.jks
 
-      - name: Build Debug APK
+      # Changed: Use assembleRelease instead of assembleDebug
+      - name: Build Release APK
         env:
           # Inject repository secret CUSTOM_TUNNEL_ID into Gradle build process
           CUSTOM_TUNNEL_ID: ${{ secrets.CUSTOM_TUNNEL_ID }}
@@ -56,16 +57,17 @@ jobs:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        # Execute build using environment-installed gradle instead of ./gradlew script
-        run: gradle assembleDebug --stacktrace --parallel --build-cache --no-daemon
+        # Execute build using assembleRelease task
+        run: gradle assembleRelease --stacktrace --parallel --build-cache --no-daemon
 
       # ==========================================
       # 3. Artifact Upload
       # ==========================================
-      - name: Upload Debug APK
+      # Changed: Upload the signed release APK from the release outputs folder
+      - name: Upload Release APK
         uses: actions/upload-artifact@v7
         with:
-          name: passkey-bridge-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: passkey-bridge-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 7
