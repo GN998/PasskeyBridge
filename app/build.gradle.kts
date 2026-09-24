@@ -26,6 +26,20 @@ android {
     namespace = "com.yourcompany.passkeybridge"
     compileSdk = 34
 
+    // Add signingConfigs for fixed certificate
+    signingConfigs {
+        create("fixedConfig") {
+            val keystoreFile = rootProject.file("my-release-key.jks")
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                // Prioritize environment variables (CI), fallback to local.properties (local dev)
+                storePassword = System.getenv("STORE_PASSWORD") ?: localProperties.getProperty("STORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS") ?: localProperties.getProperty("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD") ?: localProperties.getProperty("KEY_PASSWORD")
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "com.yourcompany.passkeybridge"
         minSdk = 28
@@ -38,7 +52,13 @@ android {
     }
 
     buildTypes {
+        // Apply fixedConfig to debug build
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("fixedConfig")
+        }
         release {
+            // Apply fixedConfig to release build
+            signingConfig = signingConfigs.getByName("fixedConfig")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

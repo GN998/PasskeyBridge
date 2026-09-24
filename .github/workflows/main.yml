@@ -41,10 +41,21 @@ jobs:
       # ==========================================
       # 2. Build Process (Using system Gradle directly)
       # ==========================================
+      # Decode Base64 keystore to file before build
+      - name: Decode Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > my-release-key.jks
+
       - name: Build Debug APK
         env:
           # Inject repository secret CUSTOM_TUNNEL_ID into Gradle build process
           CUSTOM_TUNNEL_ID: ${{ secrets.CUSTOM_TUNNEL_ID }}
+          # Inject keystore credentials into Gradle build process
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         # Execute build using environment-installed gradle instead of ./gradlew script
         run: gradle assembleDebug --stacktrace --parallel --build-cache --no-daemon
 
