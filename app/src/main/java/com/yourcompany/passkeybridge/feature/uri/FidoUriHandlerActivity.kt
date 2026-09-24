@@ -40,7 +40,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
             val qrData = HybridQrParser.parse(uriString)
             
-            if (qrData != null && qrData.tunnelServerId == 266) {
+            if (qrData != null && qrData.tunnelServerId == 267) {
                 tv.append("\n\nParsed successfully. Running Step 2 Spike...")
                 runStep2Spike()
             } else {
