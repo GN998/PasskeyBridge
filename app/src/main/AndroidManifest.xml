@@ -7,7 +7,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
-    <!-- Note: CAMERA permission removed for Step 1 -->
+    
+    <!-- Fix: Add Location permissions strictly required for BLE advertising on many Android versions -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:name=".BridgeApplication"
@@ -18,7 +21,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Material3.DayNight">
 
-        <!-- Replaced QrScannerActivity with FidoUriHandlerActivity -->
         <activity
             android:name=".feature.uri.FidoUriHandlerActivity"
             android:exported="true">
@@ -27,7 +29,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             
-            <!-- Intercept FIDO URIs via ACTION_VIEW -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

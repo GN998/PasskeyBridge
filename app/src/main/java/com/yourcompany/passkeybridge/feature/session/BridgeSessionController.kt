@@ -2,6 +2,7 @@ package com.yourcompany.passkeybridge.feature.session
 
 import android.content.Context
 import android.util.Log
+import com.yourcompany.passkeybridge.BuildConfig
 import com.yourcompany.passkeybridge.core.proxy.CredentialManagerProxy
 import com.yourcompany.passkeybridge.core.transport.TransportManager
 import com.yourcompany.passkeybridge.core.ctap.model.CtapStatus
@@ -9,6 +10,7 @@ import com.yourcompany.passkeybridge.core.ctap.codec.CtapCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class BridgeSessionController(
@@ -16,24 +18,26 @@ class BridgeSessionController(
     private val transportManager: TransportManager? = null
 ) {
     private val proxy = CredentialManagerProxy(context)
-    // Introduce SupervisorJob to control coroutine lifecycle
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    
+    var onStatusUpdate: ((String) -> Unit)? = null
 
-    fun onQrCodeScanned(eid: ByteArray, psk: ByteArray) {
-        transportManager?.startSession(eid, psk) { rawCtapRequest ->
+    // Default value provided for domainId to ensure backwards compatibility
+    fun onQrCodeScanned(peerPublicKey: ByteArray, psk: ByteArray, domainId: Int = BuildConfig.TUNNEL_ID) {
+        transportManager?.onStatusUpdate = { status ->
+            scope.launch { onStatusUpdate?.invoke(status) }
+        }
+
+        transportManager?.startSession(peerPublicKey, psk, domainId) { rawCtapRequest ->
             var responseBytes = byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
             
             try {
-                // 1. Decode the binary CTAP command frame
                 val parsedRequest = CtapCodec.decodeRequest(rawCtapRequest)
                 
-                // 2. Transport layer callback is synchronous; use runBlocking temporarily
-                // Note: For future iterations, consider migrating to a fully asynchronous data flow
                 val response = runBlocking(Dispatchers.Main) {
                     proxy.handleCtapRequest(parsedRequest)
                 }
                 
-                // 3. Encode status code and CBOR response body
                 responseBytes = CtapCodec.encodeResponse(response)
             } catch (e: IllegalArgumentException) {
                 Log.e("SessionController", "Invalid request format", e)

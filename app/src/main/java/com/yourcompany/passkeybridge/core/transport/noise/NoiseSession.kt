@@ -1,46 +1,99 @@
 package com.yourcompany.passkeybridge.core.transport.noise
 
 import android.util.Log
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import java.security.SecureRandom
+import java.security.KeyPairGenerator
+import java.security.interfaces.ECPrivateKey
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
 
 class NoiseSession {
-    private var isHandshakeComplete = false
-    private var sessionKey: SecretKeySpec? = null
+    var isHandshakeComplete = false
+        private set
+    
+    private var noiseState: NoiseHandshakeState? = null
+    private var crypter: NoiseCrypter? = null
+    private var peerPublicKeyBytes: ByteArray? = null
 
-    fun performHandshake(psk: ByteArray): Boolean {
-        // Fix: Add AES-GCM skeleton to replace plaintext passthrough.
-        // Note: Real production environment still requires standard Noise protocol library (e.g., southernstorm/noise) to implement full state machine.
-        try {
-            sessionKey = SecretKeySpec(psk.copyOf(32), "AES")
-            isHandshakeComplete = true
-            Log.d("NoiseSession", "Noise KNpsk0 handshake initialization complete.")
-            return true
-        } catch (e: Exception) {
-            Log.e("NoiseSession", "Handshake failed", e)
-            return false
-        }
+    // Inject the PC's public key (scanned from QR)
+    fun setPeerPublicKey(keyBytes: ByteArray) {
+        this.peerPublicKeyBytes = keyBytes
+    }
+
+    // Step 1: Initialize the noise state machine
+    fun initializeHandshake(psk: ByteArray) {
+        val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
+        val nh = NoiseHandshakeState(mode = 3)
+        noiseState = nh
+        
+        nh.mixHash(byteArrayOf(1))
+        nh.mixHash(peerKey)
+        nh.mixKeyAndHash(psk)
+        Log.d("NoiseSession", "Noise KNpsk0 initialized, waiting for ClientHello from WebSocket")
+    }
+
+    // Step 2: Process the incoming ClientHello and generate ServerHello
+    fun processClientHelloAndGenerateServerHello(clientHello: ByteArray): ByteArray {
+        val nh = noiseState ?: throw IllegalStateException("Handshake not initialized")
+        val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
+        
+        val pcEphemeralPubKey = clientHello.copyOfRange(0, 65)
+        val clientHelloPayload = clientHello.copyOfRange(65, clientHello.size)
+        
+        nh.mixHash(pcEphemeralPubKey)
+        nh.mixKey(pcEphemeralPubKey)
+        nh.decryptAndHash(clientHelloPayload)
+
+        val (ephPub, ephPriv) = generateEcKeyPair()
+        val phoneEphemeralPubKey = uncompressECKey(ephPub)
+        
+        nh.mixHash(phoneEphemeralPubKey)
+        nh.mixKey(phoneEphemeralPubKey)
+        
+        val peDh = CryptoHelper.recd(ephPriv, pcEphemeralPubKey)
+        nh.mixKey(peDh)
+        
+        val psDh = CryptoHelper.recd(ephPriv, peerKey)
+        nh.mixKey(psDh)
+        
+        val serverHelloPayload = nh.encryptAndHash(ByteArray(0))
+        val serverHello = phoneEphemeralPubKey + serverHelloPayload
+        
+        val (rx, tx) = nh.splitSessionKeys()
+        crypter = NoiseCrypter(rx, tx)
+        isHandshakeComplete = true
+        
+        Log.d("NoiseSession", "Processed ClientHello, generated ServerHello. Handshake complete.")
+        return serverHello
     }
 
     fun encrypt(plaintext: ByteArray): ByteArray {
-        check(isHandshakeComplete && sessionKey != null) { "Handshake not complete" }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val nonce = ByteArray(12)
-        SecureRandom().nextBytes(nonce)
-        cipher.init(Cipher.ENCRYPT_MODE, sessionKey, GCMParameterSpec(128, nonce))
-        val ciphertext = cipher.doFinal(plaintext)
-        // Concatenate Nonce and ciphertext as a simple secure payload for transmission
-        return nonce + ciphertext
+        check(isHandshakeComplete) { "Handshake not complete" }
+        return crypter?.encrypt(plaintext) ?: plaintext
     }
 
     fun decrypt(ciphertext: ByteArray): ByteArray {
-        check(isHandshakeComplete && sessionKey != null) { "Handshake not complete" }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val nonce = ciphertext.copyOfRange(0, 12)
-        val actualCiphertext = ciphertext.copyOfRange(12, ciphertext.size)
-        cipher.init(Cipher.DECRYPT_MODE, sessionKey, GCMParameterSpec(128, nonce))
-        return cipher.doFinal(actualCiphertext)
+        check(isHandshakeComplete) { "Handshake not complete" }
+        return crypter?.decrypt(ciphertext) ?: ciphertext
+    }
+    
+    // Helper to generate EC Key Pair
+    private fun generateEcKeyPair(): Pair<ECPublicKey, ECPrivateKey> {
+        val kpg = KeyPairGenerator.getInstance("EC").apply {
+            initialize(ECGenParameterSpec("secp256r1"))
+        }
+        val kp = kpg.generateKeyPair()
+        return (kp.public as ECPublicKey) to (kp.private as ECPrivateKey)
+    }
+    
+    // Helper to uncompress EC Public Key
+    private fun uncompressECKey(pub: ECPublicKey): ByteArray {
+        val p = pub.w
+        val x = p.affineX.toByteArray()
+        val y = p.affineY.toByteArray()
+        return ByteArray(65).apply {
+            this[0] = 0x04
+            System.arraycopy(x, (x.size - 32).coerceAtLeast(0), this, 1 + (32 - x.size).coerceAtLeast(0), x.size.coerceAtMost(32))
+            System.arraycopy(y, (y.size - 32).coerceAtLeast(0), this, 33 + (32 - y.size).coerceAtLeast(0), y.size.coerceAtMost(32))
+        }
     }
 }
