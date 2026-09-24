@@ -1,0 +1,60 @@
+name: Android CI Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Force Node 24 runtime to resolve action runner deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      # ==========================================
+      # 1. Repository Checkout & Environment Setup
+      # ==========================================
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      # ==========================================
+      # 2. Build Process (Using system Gradle directly)
+      # ==========================================
+      - name: Build Debug APK
+        env:
+          # Inject repository secret CUSTOM_TUNNEL_ID into Gradle build process
+          CUSTOM_TUNNEL_ID: ${{ secrets.CUSTOM_TUNNEL_ID }}
+        # Execute build using environment-installed gradle instead of ./gradlew script
+        run: gradle assembleDebug --stacktrace --parallel --build-cache --no-daemon
+
+      # ==========================================
+      # 3. Artifact Upload
+      # ==========================================
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: passkey-bridge-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
