@@ -87,9 +87,9 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
-    // Android 14 CredentialManager
+    // Android 14 CredentialManager (Core API)
+    // Removed legacy credentials-play-services-auth transitive dependency to prevent unwanted GMS permissions
     implementation("androidx.credentials:credentials:1.3.0-alpha04")
-    implementation("androidx.credentials:credentials-play-services-auth:1.3.0-alpha04")
 
     // kotlinx.serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.3")
