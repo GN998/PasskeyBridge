@@ -10,10 +10,10 @@ object DomainDerivation {
     fun deriveDomainForTunnelId(tunnelId: Int): String {
         // IDs below 256 are reserved directly assigned domains
         if (tunnelId < 256) {
-            return if (tunnelId < ASSIGNED_DOMAINS.size) ASSIGNED_DOMAINS[tunnelId] else ""
+            return if (tunnelId in ASSIGNED_DOMAINS.indices) ASSIGNED_DOMAINS[tunnelId] else ASSIGNED_DOMAINS[0]
         }
 
-        // Fix: Follow CTAP 2.3 Hybrid Routing ID derivation algorithm (Little-Endian & specific prefix)
+        // CTAP 2.3 Hybrid Routing ID derivation algorithm (Little-Endian & specific prefix)
         val prefix = "caBLEv2 tunnel server domain".toByteArray(Charsets.US_ASCII)
         val buffer = ByteBuffer.allocate(prefix.size + 3).order(ByteOrder.LITTLE_ENDIAN)
         buffer.put(prefix)

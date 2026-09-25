@@ -7,6 +7,8 @@ import com.yourcompany.passkeybridge.core.transport.ble.HybridBleAdvertiser
 import com.yourcompany.passkeybridge.core.transport.noise.CryptoHelper
 import com.yourcompany.passkeybridge.core.transport.noise.NoiseSession
 import com.yourcompany.passkeybridge.core.transport.websocket.TunnelWebsocket
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class TransportManager(
     private val bleAdvertiser: HybridBleAdvertiser
@@ -16,7 +18,6 @@ class TransportManager(
     
     var onStatusUpdate: ((String) -> Unit)? = null
 
-    // Default value provided for domainId to ensure backwards compatibility
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
@@ -25,7 +26,6 @@ class TransportManager(
     ) {
         val uncompressedPeerKey = CryptoHelper.decompressECKey(peerPublicKey)
         noiseSession.setPeerPublicKey(uncompressedPeerKey)
-        noiseSession.initializeHandshake(psk)
 
         val ephemeralTunnelId = CryptoHelper.endif(
             ikm = psk,
@@ -34,56 +34,85 @@ class TransportManager(
             length = 16
         )
 
-        tunnelWebsocket = TunnelWebsocket(domainId, ephemeralTunnelId, onConnected = { routingId ->
-            val finalEid = CryptoHelper.generateEid(qrSecret = psk, routingId = routingId, domainId = domainId)
-            bleAdvertiser.startAdvertising(finalEid)
-            onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
-            
-        }, onMessageReceived = { encryptedFrame ->
-            try {
-                if (!noiseSession.isHandshakeComplete) {
-                    Log.d("TransportManager", "Received ClientHello, processing handshake...")
-                    val serverHello = noiseSession.processClientHelloAndGenerateServerHello(encryptedFrame)
-                    tunnelWebsocket?.sendFrame(serverHello)
-                    
-                    val msg = "Noise KNpsk0 Handshake Success!\nSent Post-Handshake Message."
-                    Log.d("TransportManager", msg)
-                    onStatusUpdate?.invoke(msg)
-                    
-                    val postHandshakeMsg = buildPostHandshakeMessage()
-                    tunnelWebsocket?.sendFrame(noiseSession.encrypt(postHandshakeMsg))
-                } else {
-                    val decrypted = noiseSession.decrypt(encryptedFrame)
-                    if (decrypted.isEmpty()) return@TunnelWebsocket
-                    
-                    val frameType = decrypted[0].toInt() and 0xFF
-                    when (frameType) {
-                        0x01 -> {
-                            val logMsg = "Received CTAP Request!"
-                            Log.d("TransportManager", logMsg)
-                            onStatusUpdate?.invoke(logMsg)
-                            
-                            val ctapReq = decrypted.copyOfRange(1, decrypted.size)
-                            val response = onRequestReceived(ctapReq)
-                            val framedResponse = byteArrayOf(0x01) + response
-                            tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
-                        }
-                        0x00 -> Log.d("TransportManager", "Received Control/ACK message")
-                        else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
-                    }
+        tunnelWebsocket = TunnelWebsocket(
+            domainId = domainId,
+            ephemeralTunnelId = ephemeralTunnelId,
+            onConnected = { routingId ->
+                // 1. Construct 16-byte advertPlaintext required by FIDO caBLE v2 specification
+                val advertPlaintext = ByteArray(16).apply {
+                    this[0] = 0x00
+                    val timestamp = System.currentTimeMillis()
+                    val buffer = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(timestamp)
+                    System.arraycopy(buffer.array(), 0, this, 1, 8)
+                    System.arraycopy(routingId, 0, this, 11, 3)
+                    this[14] = (domainId and 0xFF).toByte()
+                    this[15] = ((domainId ushr 8) and 0xFF).toByte()
                 }
-            } catch (e: Exception) {
-                val msg = "Frame Error: ${e.message}"
-                Log.e("TransportManager", msg, e)
-                onStatusUpdate?.invoke(msg)
+
+                // 2. Derive true Noise PSK bound to the BLE advertisement plaintext
+                val noisePsk = CryptoHelper.endif(
+                    ikm = psk,
+                    salt = advertPlaintext,
+                    info = byteArrayOf(3, 0, 0, 0),
+                    length = 32
+                )
+
+                // 3. Initialize Noise KNpsk0 state machine with derived noisePsk
+                noiseSession.initializeHandshake(noisePsk)
+
+                // 4. Generate standard 20-byte EID and start BLE advertising for local proximity verification
+                val finalEid = CryptoHelper.generateEid(qrSecret = psk, routingId = routingId, domainId = domainId)
+                bleAdvertiser.startAdvertising(finalEid)
+                onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
+            },
+            onMessageReceived = { encryptedFrame ->
+                try {
+                    if (!noiseSession.isHandshakeComplete) {
+                        Log.d("TransportManager", "Received ClientHello, processing Noise KNpsk0 handshake...")
+                        val serverHello = noiseSession.processClientHelloAndGenerateServerHello(encryptedFrame)
+                        tunnelWebsocket?.sendFrame(serverHello)
+                        
+                        val msg = "Noise KNpsk0 Handshake Success!\nSent Post-Handshake Message."
+                        Log.d("TransportManager", msg)
+                        onStatusUpdate?.invoke(msg)
+                        
+                        val postHandshakeMsg = buildPostHandshakeMessage()
+                        tunnelWebsocket?.sendFrame(noiseSession.encrypt(postHandshakeMsg))
+                    } else {
+                        val decrypted = noiseSession.decrypt(encryptedFrame)
+                        if (decrypted.isEmpty()) return@TunnelWebsocket
+                        
+                        val frameType = decrypted[0].toInt() and 0xFF
+                        when (frameType) {
+                            0x01 -> {
+                                val logMsg = "Received CTAP Request!"
+                                Log.d("TransportManager", logMsg)
+                                onStatusUpdate?.invoke(logMsg)
+                                
+                                val ctapReq = decrypted.copyOfRange(1, decrypted.size)
+                                val response = onRequestReceived(ctapReq)
+                                val framedResponse = byteArrayOf(0x01) + response
+                                tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+                            }
+                            0x00 -> Log.d("TransportManager", "Received Control/ACK message")
+                            else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    val msg = "Frame Error: ${e.message}"
+                    Log.e("TransportManager", msg, e)
+                    onStatusUpdate?.invoke(msg)
+                }
+            },
+            onStatusUpdate = { status ->
+                onStatusUpdate?.invoke(status)
             }
-        }, onStatusUpdate = { status ->
-            onStatusUpdate?.invoke(status)
-        })
+        )
         tunnelWebsocket?.connect()
     }
 
     fun stopSession() {
+        bleAdvertiser.stopAdvertising()
         tunnelWebsocket?.close()
     }
 

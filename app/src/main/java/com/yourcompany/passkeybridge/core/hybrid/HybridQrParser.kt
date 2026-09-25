@@ -1,57 +1,93 @@
 package com.yourcompany.passkeybridge.core.hybrid
 
 import com.yourcompany.passkeybridge.BuildConfig
-import java.math.BigInteger
+import com.yourcompany.passkeybridge.core.ctap.codec.CtapCodec
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
-// Parser object for handling FIDO URI and QR code data parsing
+// Parser object for handling FIDO caBLE v2 (CTAP 2.3) URI and QR code data parsing
 object HybridQrParser {
 
-    // Parses a FIDO URI string into a HybridQrData instance
+    private val PADDING_TABLE = intArrayOf(0, 3, 5, 8, 10, 13, 15)
+
+    // Parses a FIDO URI string (FIDO:/...) into a HybridQrData instance
     fun parse(uriString: String): HybridQrData? {
         try {
-            // 1. Validate and strip the FIDO URI prefix
             val prefix = "fido:/"
             if (!uriString.startsWith(prefix, ignoreCase = true)) {
                 return null
             }
-            
-            val numberStr = uriString.substring(prefix.length)
-            
-            // 2. Decode the Base10 string into a byte array
-            var bytes = BigInteger(numberStr, 10).toByteArray()
-            
-            // BigInteger may add a leading 0x00 sign byte to keep the value positive; remove it if present
-            if (bytes.size > 1 && bytes[0] == 0.toByte()) {
-                bytes = bytes.copyOfRange(1, bytes.size)
-            }
-            
-            if (bytes.isEmpty()) {
-                return null
-            }
-            
-            // 3. Extract components based on standard CTAP Hybrid QR byte layout
-            // Byte 0: Version
-            // Bytes 1 to 16: QR Secret (16 bytes)
-            // Bytes 17 to end: Public Key (Typically 32 or 33 bytes)
-            val version = bytes[0].toInt()
-            
-            val secretLength = 16
-            if (bytes.size <= 1 + secretLength) {
-                return null // Payload too short
-            }
-            
-            val secret = bytes.copyOfRange(1, 1 + secretLength)
-            val publicKey = bytes.copyOfRange(1 + secretLength, bytes.size)
-            
+
+            val encoded = uriString.substring(prefix.length)
+            val cborBytes = decodeGmsBase34(encoded) ?: return null
+
+            val cborMap = CtapCodec.SimpleCbor.read(cborBytes) as? Map<*, *> ?: return null
+
+            // Key 0: 33-byte compressed P-256 public key
+            val publicKey = (cborMap[0L] ?: cborMap[0]) as? ByteArray ?: return null
+
+            // Key 1: 16-byte random QR secret
+            val secret = (cborMap[1L] ?: cborMap[1]) as? ByteArray ?: return null
+
+            // Key 2: Tunnel Server ID (assigned domain index or hashed domain ID)
+            val tunnelServerIdRaw = (cborMap[2L] ?: cborMap[2]) as? Number
+            val tunnelServerId = tunnelServerIdRaw?.toInt() ?: BuildConfig.TUNNEL_ID
+
             return HybridQrData(
-                version = version,
+                version = 2,
                 publicKey = publicKey,
                 secret = secret,
-                // Assign the tunnelServerId dynamically from the injected build configuration
-                tunnelServerId = BuildConfig.TUNNEL_ID
+                tunnelServerId = tunnelServerId
             )
         } catch (e: Exception) {
-            // Return null if parsing fails (e.g., NumberFormatException)
+            return null
+        }
+    }
+
+    // Decodes GMS Base34 (17-digit decimal groups) encoded string into CBOR byte array
+    private fun decodeGmsBase34(encoded: String): ByteArray? {
+        try {
+            val length = encoded.length
+            val fullBlocks = length / 17
+            val remainder = length % 17
+
+            val remainingBytes = PADDING_TABLE.indexOfFirst { remainder == it }
+            if (remainingBytes == -1) return null
+
+            val totalBytes = fullBlocks * 7 + remainingBytes
+            val result = ByteArray(totalBytes)
+            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+
+            // Decode full 17-digit blocks into 7 bytes each
+            for (i in 0 until fullBlocks) {
+                val digitGroup = encoded.substring(i * 17, (i + 1) * 17)
+                val longValue = digitGroup.toLongOrNull() ?: return null
+
+                buffer.rewind()
+                buffer.putLong(longValue)
+                buffer.rewind()
+                buffer.get(result, i * 7, 7)
+
+                if (buffer.get() != 0.toByte()) return null
+            }
+
+            // Decode trailing partial block
+            if (remainder > 0) {
+                val remainingDigits = encoded.substring(fullBlocks * 17)
+                val longValue = remainingDigits.toLongOrNull() ?: return null
+
+                buffer.rewind()
+                buffer.putLong(longValue)
+                buffer.rewind()
+                buffer.get(result, totalBytes - remainingBytes, remainingBytes)
+
+                while (buffer.hasRemaining()) {
+                    if (buffer.get() != 0.toByte()) return null
+                }
+            }
+
+            return result
+        } catch (e: Exception) {
             return null
         }
     }

@@ -19,16 +19,16 @@ class NoiseSession {
         this.peerPublicKeyBytes = keyBytes
     }
 
-    // Step 1: Initialize the noise state machine
+    // Step 1: Initialize the noise state machine with derived PSK
     fun initializeHandshake(psk: ByteArray) {
         val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
-        val nh = NoiseHandshakeState(mode = 3)
+        val nh = NoiseHandshakeState(mode = 3) // Noise KNpsk0
         noiseState = nh
         
         nh.mixHash(byteArrayOf(1))
         nh.mixHash(peerKey)
         nh.mixKeyAndHash(psk)
-        Log.d("NoiseSession", "Noise KNpsk0 initialized, waiting for ClientHello from WebSocket")
+        Log.d("NoiseSession", "Noise KNpsk0 initialized with derived PSK, waiting for ClientHello")
     }
 
     // Step 2: Process the incoming ClientHello and generate ServerHello
@@ -36,6 +36,10 @@ class NoiseSession {
         val nh = noiseState ?: throw IllegalStateException("Handshake not initialized")
         val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
         
+        if (clientHello.size < 81) {
+            throw IllegalArgumentException("ClientHello message too short: ${clientHello.size} bytes")
+        }
+
         val pcEphemeralPubKey = clientHello.copyOfRange(0, 65)
         val clientHelloPayload = clientHello.copyOfRange(65, clientHello.size)
         

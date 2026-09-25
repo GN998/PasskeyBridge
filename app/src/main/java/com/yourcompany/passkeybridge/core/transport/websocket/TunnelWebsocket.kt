@@ -4,15 +4,21 @@ import android.util.Log
 import com.yourcompany.passkeybridge.core.security.DomainDerivation
 import okhttp3.*
 import okio.ByteString
+import java.util.concurrent.TimeUnit
 
 class TunnelWebsocket(
     private val domainId: Int,
     private val ephemeralTunnelId: ByteArray,
-    private val onConnected: (ByteArray) -> Unit, // Fix: Added connection callback to receive Routing ID
+    private val onConnected: (ByteArray) -> Unit,
     private val onMessageReceived: (ByteArray) -> Unit,
     private val onStatusUpdate: ((String) -> Unit)? = null
 ) {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     private var webSocket: WebSocket? = null
 
     fun connect() {
@@ -32,19 +38,25 @@ class TunnelWebsocket(
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
                 
-                // Fix: Extract Routing ID from headers
-                val routingIdHex = response.header("X-Cable-Routing-Id")
+                // Extract 3-byte Routing ID from HTTP response header "X-Cable-Routing-Id"
+                val routingIdHeader = response.header("X-Cable-Routing-Id") ?: response.header("x-cable-routing-id")
                 val routingId = try {
-                    if (routingIdHex != null) {
-                        val bytes = ByteArray(routingIdHex.length / 2)
-                        for (i in bytes.indices) {
-                            bytes[i] = routingIdHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+                    if (!routingIdHeader.isNullOrEmpty()) {
+                        val routingIdHex = routingIdHeader.trim()
+                        if (routingIdHex.length == 6) {
+                            val bytes = ByteArray(3)
+                            for (i in 0 until 3) {
+                                bytes[i] = routingIdHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+                            }
+                            bytes
+                        } else {
+                            routingIdHex.toByteArray(Charsets.ISO_8859_1).copyOf(3)
                         }
-                        bytes
                     } else {
-                        ByteArray(3) // Fallback
+                        ByteArray(3) // Fallback empty routing ID
                     }
                 } catch (e: Exception) {
+                    Log.w("TunnelWebsocket", "Failed to parse X-Cable-Routing-Id header: $routingIdHeader", e)
                     ByteArray(3)
                 }
                 onConnected(routingId)
@@ -60,7 +72,7 @@ class TunnelWebsocket(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 val msg = "WebSocket Error: ${t.message}"
-                Log.e("TunnelWebsocket", msg)
+                Log.e("TunnelWebsocket", msg, t)
                 onStatusUpdate?.invoke(msg)
             }
         })
