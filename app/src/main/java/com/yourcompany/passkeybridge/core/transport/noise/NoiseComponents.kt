@@ -59,12 +59,8 @@ object CryptoHelper {
         return uncompressed
     }
 
-    // Generate standard 20-byte EID for caBLE v2
-    fun generateEid(qrSecret: ByteArray, routingId: ByteArray, domainId: Int): ByteArray {
-        val eidKey = endif(ikm = qrSecret, salt = ByteArray(0), info = byteArrayOf(1, 0, 0, 0), length = 64)
-        val aesKey = eidKey.copyOfRange(0, 32)
-        val hmacKey = eidKey.copyOfRange(32, 64)
-
+    // Generate 16-byte advertPlaintext seed bound to routingId and timestamp
+    fun generateSeed(routingId: ByteArray, domainId: Int): ByteArray {
         val seed = ByteArray(16)
         seed[0] = 0x00
         val timestamp = System.currentTimeMillis()
@@ -73,6 +69,13 @@ object CryptoHelper {
         System.arraycopy(routingId, 0, seed, 11, 3)
         seed[14] = (domainId and 0xFF).toByte()
         seed[15] = ((domainId ushr 8) and 0xFF).toByte()
+        return seed
+    }
+
+    // Generate standard 20-byte EID for caBLE v2 given derived 64-byte eidKey and 16-byte seed
+    fun generateEid(eidKey: ByteArray, seed: ByteArray): ByteArray {
+        val aesKey = eidKey.copyOfRange(0, 32)
+        val hmacKey = eidKey.copyOfRange(32, 64)
 
         val cipher = Cipher.getInstance("AES/CBC/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKey, AEMK_ALGORITHM), IvParameterSpec(ByteArray(16)))
@@ -86,6 +89,13 @@ object CryptoHelper {
         System.arraycopy(ciphertext, 0, result, 0, 16)
         System.arraycopy(tag, 0, result, 16, 4)
         return result
+    }
+
+    // Overload for backwards compatibility
+    fun generateEid(qrSecret: ByteArray, routingId: ByteArray, domainId: Int): ByteArray {
+        val eidKey = endif(ikm = qrSecret, salt = ByteArray(0), info = byteArrayOf(1, 0, 0, 0), length = 64)
+        val seed = generateSeed(routingId, domainId)
+        return generateEid(eidKey, seed)
     }
 
     fun recd(privy: ECPrivateKey, peerUncompressedOrDer: ByteArray): ByteArray {
@@ -204,7 +214,7 @@ class NoiseHandshakeState(mode: Int) {
     }
 
     private fun endif(chainingKey: ByteArray, inputKeyMaterial: ByteArray, outputs: Int): List<ByteArray> {
-        val prk = CryptoHelper.endif(inputKeyMaterial, chainingKey, ByteArray(0), 32)
+        val prk = endifExtract(chainingKey, inputKeyMaterial)
         val mac = Mac.getInstance(HKDF_ALGORITHM).apply {
             init(SecretKeySpec(prk, HKDF_ALGORITHM))
         }
@@ -218,6 +228,12 @@ class NoiseHandshakeState(mode: Int) {
             result += previous
         }
         return result
+    }
+
+    private fun endifExtract(salt: ByteArray, ikm: ByteArray): ByteArray {
+        val s = if (salt.isEmpty()) ByteArray(32) else salt
+        val mac = Mac.getInstance(HKDF_ALGORITHM).apply { init(SecretKeySpec(s, HKDF_ALGORITHM)) }
+        return mac.doFinal(ikm)
     }
 }
 

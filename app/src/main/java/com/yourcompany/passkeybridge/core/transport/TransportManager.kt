@@ -7,8 +7,6 @@ import com.yourcompany.passkeybridge.core.transport.ble.HybridBleAdvertiser
 import com.yourcompany.passkeybridge.core.transport.noise.CryptoHelper
 import com.yourcompany.passkeybridge.core.transport.noise.NoiseSession
 import com.yourcompany.passkeybridge.core.transport.websocket.TunnelWebsocket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 class TransportManager(
     private val bleAdvertiser: HybridBleAdvertiser
@@ -38,18 +36,21 @@ class TransportManager(
             domainId = domainId,
             ephemeralTunnelId = ephemeralTunnelId,
             onConnected = { routingId ->
-                // 1. Construct 16-byte advertPlaintext required by FIDO caBLE v2 specification
-                val advertPlaintext = ByteArray(16).apply {
-                    this[0] = 0x00
-                    val timestamp = System.currentTimeMillis()
-                    val buffer = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(timestamp)
-                    System.arraycopy(buffer.array(), 0, this, 1, 8)
-                    System.arraycopy(routingId, 0, this, 11, 3)
-                    this[14] = (domainId and 0xFF).toByte()
-                    this[15] = ((domainId ushr 8) and 0xFF).toByte()
-                }
+                // 1. Generate the single 16-byte advertPlaintext seed (containing timestamp, routingId, domainId)
+                val advertPlaintext = CryptoHelper.generateSeed(routingId, domainId)
 
-                // 2. Derive true Noise PSK bound to the BLE advertisement plaintext
+                // 2. Derive 64-byte eidKey from qrSecret (psk)
+                val eidKey = CryptoHelper.endif(
+                    ikm = psk,
+                    salt = ByteArray(0),
+                    info = byteArrayOf(1, 0, 0, 0),
+                    length = 64
+                )
+
+                // 3. Encrypt the EXACT advertPlaintext seed to 20-byte BLE EID
+                val finalEid = CryptoHelper.generateEid(eidKey, advertPlaintext)
+
+                // 4. Derive 32-byte Noise PSK using the EXACT same advertPlaintext
                 val noisePsk = CryptoHelper.endif(
                     ikm = psk,
                     salt = advertPlaintext,
@@ -57,11 +58,10 @@ class TransportManager(
                     length = 32
                 )
 
-                // 3. Initialize Noise KNpsk0 state machine with derived noisePsk
+                // 5. Initialize Noise KNpsk0 state machine with derived noisePsk
                 noiseSession.initializeHandshake(noisePsk)
 
-                // 4. Generate standard 20-byte EID and start BLE advertising for local proximity verification
-                val finalEid = CryptoHelper.generateEid(qrSecret = psk, routingId = routingId, domainId = domainId)
+                // 6. Start BLE advertising with finalEid
                 bleAdvertiser.startAdvertising(finalEid)
                 onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
             },
