@@ -59,7 +59,8 @@ android {
         release {
             // Apply fixedConfig to release build
             signingConfig = signingConfigs.getByName("fixedConfig")
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
