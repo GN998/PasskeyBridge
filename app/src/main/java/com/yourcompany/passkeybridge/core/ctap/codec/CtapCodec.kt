@@ -24,7 +24,7 @@ object CtapCodec {
         val commandByte = rawPayload[0]
         val cborBytes = if (rawPayload.size > 1) rawPayload.copyOfRange(1, rawPayload.size) else ByteArray(0)
 
-        // Fix for Bug 5: Validate command code explicitly and throw CtapCodecException with ERR_INVALID_COMMAND (0x01)
+        // Validate command code explicitly and throw CtapCodecException with ERR_INVALID_COMMAND (0x01)
         return when (commandByte) {
             0x04.toByte() -> Ctap2Request.GetInfo()
             0x01.toByte() -> decodeMakeCredential(cborBytes)
@@ -59,7 +59,7 @@ object CtapCodec {
 
             val pubKeyCredParamsRaw = map[4L] as? List<*> ?: emptyList<Any>()
 
-            // Fix for Bug 6: Safely validate required fields 'type' and 'alg' without non-null assertions (!!) or unsafe casts
+            // Safely validate required fields 'type' and 'alg' without non-null assertions (!!)
             val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
                 val paramMap = item as? Map<*, *>
                     ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
@@ -222,10 +222,22 @@ object CtapCodec {
             var bytes = ByteArray(0)
             fun writeMajor(major: Int, v: Long) {
                 val type = major shl 5
-                if (v < 24) bytes += (type or v.toInt()).toByte()
-                else if (v < 256) { bytes += (type or 24).toByte(); bytes += v.toByte() }
-                else if (v < 65536) { bytes += (type or 25).toByte(); bytes += (v shr 8).toByte(); bytes += v.toByte() }
-                else { bytes += (type or 26).toByte(); bytes += (v shr 24).toByte(); bytes += (v shr 16).toByte(); bytes += (v shr 8).toByte(); bytes += v.toByte() }
+                if (v < 24) {
+                    bytes += (type or v.toInt()).toByte()
+                } else if (v < 256) {
+                    bytes += (type or 24).toByte()
+                    bytes += v.toByte()
+                } else if (v < 65536) {
+                    bytes += (type or 25).toByte()
+                    bytes += (v shr 8).toByte()
+                    bytes += v.toByte()
+                } else {
+                    bytes += (type or 26).toByte()
+                    bytes += (v shr 24).toByte()
+                    bytes += (v shr 16).toByte()
+                    bytes += (v shr 8).toByte()
+                    bytes += v.toByte()
+                }
             }
             fun writeItem(v: Any?) {
                 when (v) {

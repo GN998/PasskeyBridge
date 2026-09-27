@@ -10,8 +10,8 @@ object CtapMapper {
 
     fun toWebAuthnGetCredentialJson(req: Ctap2Request.GetAssertion): String {
         return JSONObject().apply {
-            // Fix: challenge and origin are handled via privileged API's clientDataHash instead; set to empty to maintain structure
-            put("challenge", "")
+            // Fix for Bug 1: Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
+            put("challenge", CryptoUtils.encodeBase64UrlNoPadding(req.clientDataHash))
             put("rpId", req.rpId)
             put("userVerification", req.userVerification ?: "preferred")
 
@@ -30,8 +30,8 @@ object CtapMapper {
 
     fun toWebAuthnCreateCredentialJson(req: Ctap2Request.MakeCredential): String {
         return JSONObject().apply {
-            // Fix: Same as above, no need to incorrectly disguise challenge using base64(hash)
-            put("challenge", "")
+            // Fix for Bug 1: Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
+            put("challenge", CryptoUtils.encodeBase64UrlNoPadding(req.clientDataHash))
             put("rp", JSONObject().apply {
                 put("id", req.rpId)
                 put("name", req.rpName)
@@ -63,7 +63,7 @@ object CtapMapper {
         val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
         val attestationObjectBytes = CryptoUtils.decodeBase64Url(responseObj.getString("attestationObject"))
         
-        // Fix: Decode the CBOR attestationObject into fmt, authData, and attStmt
+        // Decode the CBOR attestationObject into fmt, authData, and attStmt
         val map = com.yourcompany.passkeybridge.core.ctap.codec.CtapCodec.SimpleCbor.read(attestationObjectBytes) as Map<*, *>
         
         return Ctap2Response.MakeCredentialResponse(
