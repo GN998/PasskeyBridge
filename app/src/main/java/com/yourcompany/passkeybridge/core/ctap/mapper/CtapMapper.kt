@@ -10,7 +10,7 @@ object CtapMapper {
 
     fun toWebAuthnGetCredentialJson(req: Ctap2Request.GetAssertion): String {
         return JSONObject().apply {
-            // Fix for Bug 1: Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
+            // Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
             put("challenge", CryptoUtils.encodeBase64UrlNoPadding(req.clientDataHash))
             put("rpId", req.rpId)
             put("userVerification", req.userVerification ?: "preferred")
@@ -30,7 +30,7 @@ object CtapMapper {
 
     fun toWebAuthnCreateCredentialJson(req: Ctap2Request.MakeCredential): String {
         return JSONObject().apply {
-            // Fix for Bug 1: Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
+            // Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
             put("challenge", CryptoUtils.encodeBase64UrlNoPadding(req.clientDataHash))
             put("rp", JSONObject().apply {
                 put("id", req.rpId)
