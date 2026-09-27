@@ -1,15 +1,11 @@
 package com.yourcompany.passkeybridge.core.ctap.mapper
 
-import android.util.Log
 import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Request
 import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Response
 import com.yourcompany.passkeybridge.core.security.CryptoUtils
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Mapper for converting between CTAP2 data models and WebAuthn JSON representations.
- */
 object CtapMapper {
 
     fun toWebAuthnGetCredentialJson(req: Ctap2Request.GetAssertion): String {
@@ -55,25 +51,10 @@ object CtapMapper {
 
     fun parseAssertionResponseJson(jsonResponseStr: String, credentialId: ByteArray): Ctap2Response.GetAssertionResponse {
         val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
-        val rawSigStr = responseObj.getString("signature")
-        val rawAuthDataStr = responseObj.getString("authenticatorData")
-
-        // Diagnostic Log Node 2: Log signature string extracted from response JSON
-        Log.d("FIDO_DIAG", "================ [2. JSON EXTRACTED SIGNATURE STRING] ================")
-        Log.d("FIDO_DIAG", "rawSigStr: '$rawSigStr'")
-        Log.d("FIDO_DIAG", "rawSigStr length: ${rawSigStr.length}")
-
-        val sigBytes = CryptoUtils.decodeBase64Url(rawSigStr)
-
-        // Diagnostic Log Node 3: Log Base64 decoded signature bytes
-        Log.d("FIDO_DIAG", "================ [3. BASE64 DECODED SIGNATURE BYTES] ================")
-        Log.d("FIDO_DIAG", "sigBytes size: ${sigBytes.size}")
-        Log.d("FIDO_DIAG", "sigBytes hex: ${sigBytes.joinToString("") { "%02X".format(it) }}")
-
         return Ctap2Response.GetAssertionResponse(
             credentialId = credentialId,
-            authenticatorData = CryptoUtils.decodeBase64Url(rawAuthDataStr),
-            signature = sigBytes,
+            authenticatorData = CryptoUtils.decodeBase64Url(responseObj.getString("authenticatorData")),
+            signature = CryptoUtils.decodeBase64Url(responseObj.getString("signature")),
             userHandle = responseObj.optString("userHandle", null)?.takeIf { it.isNotEmpty() }?.let { CryptoUtils.decodeBase64Url(it) }
         )
     }
