@@ -11,6 +11,8 @@ import com.yourcompany.passkeybridge.core.ctap.AuthenticatorInfo
 import com.yourcompany.passkeybridge.core.ctap.mapper.CtapMapper
 import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Request
 import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Response
+import com.yourcompany.passkeybridge.core.security.CryptoUtils
+import org.json.JSONObject
 
 class CredentialManagerProxy(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
@@ -31,18 +33,25 @@ class CredentialManagerProxy(private val context: Context) {
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash
         )
-        // Fix: Call setOrigin on GetCredentialRequest.Builder instead of option
+        // Call setOrigin on GetCredentialRequest.Builder
         val getReq = GetCredentialRequest.Builder()
             .addCredentialOption(option)
             .setOrigin(trustedOrigin)
             .build()
 
-        // Removed try-catch to let the Spike UI catch and print exact errors (e.g. NoCredentialException)
         val result = credentialManager.getCredential(context, getReq)
         if (result.credential is PublicKeyCredential) {
             val pubKeyCredential = result.credential as PublicKeyCredential
             val responseJson = pubKeyCredential.authenticationResponseJson
-            val credId = req.allowList?.firstOrNull()?.id ?: ByteArray(0)
+            // Fix for Bug 5: Extract credential ID from allowList or parse authenticationResponseJson (Passkey / discoverable credentials)
+            val credId = req.allowList?.firstOrNull()?.id?.takeIf { it.isNotEmpty() }
+                ?: try {
+                    val responseObj = JSONObject(responseJson)
+                    val idStr = responseObj.optString("id", "").ifEmpty { responseObj.optString("rawId", "") }
+                    if (idStr.isNotEmpty()) CryptoUtils.decodeBase64Url(idStr) else ByteArray(0)
+                } catch (e: Exception) {
+                    ByteArray(0)
+                }
             return CtapMapper.parseAssertionResponseJson(responseJson, credId)
         } else {
             return Ctap2Response.ErrorResponse(0x31)
@@ -53,15 +62,13 @@ class CredentialManagerProxy(private val context: Context) {
         val jsonRequest = CtapMapper.toWebAuthnCreateCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
 
-        // Fix: Explicitly pass raw clientDataHash and origin using privileged API
         val createReq = CreatePublicKeyCredentialRequest(
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash,
-            origin = trustedOrigin, // Ensure this is explicitly set
+            origin = trustedOrigin,
             preferImmediatelyAvailableCredentials = false
         )
 
-        // Removed try-catch to let the Spike UI catch and print exact API or Permission errors
         val result = credentialManager.createCredential(context, createReq)
         if (result is CreatePublicKeyCredentialResponse) {
             val responseJson = result.registrationResponseJson

@@ -95,7 +95,8 @@ object CtapCodec {
                 if (response.credentialId.isNotEmpty()) {
                     map[1L] = mapOf("id" to response.credentialId, "type" to "public-key")
                 }
-                response.userHandle?.let { map[6L] = it }
+                // Fix for Bug 1: Map userHandle to key 4L (user entity) instead of key 6L (userSelected boolean) according to CTAP 2.3 §6.2.2
+                response.userHandle?.let { map[4L] = mapOf("id" to it) }
                 byteArrayOf(CtapStatus.SUCCESS) + SimpleCbor.write(map)
             }
         }
@@ -175,7 +176,34 @@ object CtapCodec {
                     is ByteArray -> { writeMajor(2, v.size.toLong()); bytes += v }
                     is String -> { val b = v.toByteArray(); writeMajor(3, b.size.toLong()); bytes += b }
                     is List<*> -> { writeMajor(4, v.size.toLong()); v.forEach { writeItem(it) } }
-                    is Map<*, *> -> { writeMajor(5, v.size.toLong()); v.forEach { (k, vl) -> writeItem(k); writeItem(vl) } }
+                    is Map<*, *> -> {
+                        // Fix for Bug 2: Sort map keys according to CTAP2 Canonical CBOR encoding rules
+                        writeMajor(5, v.size.toLong())
+                        val sortedEntries = v.entries.map { (k, vl) ->
+                            Pair(k, write(k)) to vl
+                        }.sortedWith { a, b ->
+                            val k1Bytes = a.first.second
+                            val k2Bytes = b.first.second
+                            if (k1Bytes.size != k2Bytes.size) {
+                                k1Bytes.size.compareTo(k2Bytes.size)
+                            } else {
+                                var cmp = 0
+                                for (i in k1Bytes.indices) {
+                                    val b1 = k1Bytes[i].toInt() and 0xFF
+                                    val b2 = k2Bytes[i].toInt() and 0xFF
+                                    if (b1 != b2) {
+                                        cmp = b1.compareTo(b2)
+                                        break
+                                    }
+                                }
+                                cmp
+                            }
+                        }
+                        sortedEntries.forEach { (keyPair, vl) ->
+                            writeItem(keyPair.first)
+                            writeItem(vl)
+                        }
+                    }
                     is Boolean -> bytes += if (v) 0xF5.toByte() else 0xF4.toByte()
                 }
             }
