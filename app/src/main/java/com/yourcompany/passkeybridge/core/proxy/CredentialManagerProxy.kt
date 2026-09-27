@@ -1,6 +1,7 @@
 package com.yourcompany.passkeybridge.core.proxy
 
 import android.content.Context
+import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
@@ -14,6 +15,9 @@ import com.yourcompany.passkeybridge.core.ctap.model.Ctap2Response
 import com.yourcompany.passkeybridge.core.security.CryptoUtils
 import org.json.JSONObject
 
+/**
+ * Proxy for handling FIDO2/CTAP requests via Android CredentialManager API.
+ */
 class CredentialManagerProxy(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
 
@@ -43,7 +47,13 @@ class CredentialManagerProxy(private val context: Context) {
         if (result.credential is PublicKeyCredential) {
             val pubKeyCredential = result.credential as PublicKeyCredential
             val responseJson = pubKeyCredential.authenticationResponseJson
-            // Fix for Bug 5: Extract credential ID from allowList or parse authenticationResponseJson (Passkey / discoverable credentials)
+
+            // Diagnostic Log Node 1: Log raw JSON string returned by Android CredentialManager API
+            Log.d("FIDO_DIAG", "================ [1. SYSTEM RAW JSON SOURCE] ================")
+            Log.d("FIDO_DIAG", "rawJson: $responseJson")
+            Log.d("FIDO_DIAG", "rawJson length: ${responseJson.length}")
+
+            // Extract credential ID from allowList or parse authenticationResponseJson (Passkey / discoverable credentials)
             val credId = req.allowList?.firstOrNull()?.id?.takeIf { it.isNotEmpty() }
                 ?: try {
                     val responseObj = JSONObject(responseJson)
