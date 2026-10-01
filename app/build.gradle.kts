@@ -23,7 +23,7 @@ val tunnelId = rawTunnelId.toIntOrNull()
 println("--> [Gradle Build Config] Successfully resolved TUNNEL_ID: $tunnelId")
 
 android {
-    namespace = "com.yourcompany.passkeybridge"
+    namespace = "com.dev.fido.bridge"
     compileSdk = 34
 
     // Add signingConfigs for fixed certificate
@@ -41,7 +41,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.yourcompany.passkeybridge"
+        applicationId = "com.dev.fido.bridge"
         minSdk = 34
         targetSdk = 34
         versionCode = 1
