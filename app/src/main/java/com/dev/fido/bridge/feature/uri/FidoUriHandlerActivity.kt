@@ -23,10 +23,10 @@ import com.dev.fido.bridge.feature.session.BridgeSessionState
 import kotlinx.coroutines.launch
 
 /**
- * Handle incoming FIDO URIs, QR code intents, and caBLE v2 push notifications.
+ * Handle incoming FIDO URIs, QR code intents, and caBLE v2 push notification triggers.
  *
- * Initialize transport layers, observe BridgeSessionState transitions, and route incoming intents
- * to either QR-initiated or State-assisted passkey bridge sessions.
+ * Initialize transport layers, observe BridgeSessionState transitions reactively with lifecycle awareness,
+ * and route incoming intents to either QR-initiated or State-assisted passkey bridge sessions.
  */
 class FidoUriHandlerActivity : AppCompatActivity() {
 
@@ -47,7 +47,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     }
 
     /**
-     * Check runtime permissions required for BLE advertising and Bluetooth connection.
+     * Ensure runtime permissions required for BLE advertising and Bluetooth connection are granted.
      */
     private fun checkAndRequestPermissions() {
         val permissions = listOf(
@@ -104,7 +104,9 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     }
 
     /**
-     * Observe reactive [BridgeSessionState] lifecycle events.
+     * Observe reactive [BridgeSessionState] lifecycle events when Activity is in STARTED state.
+     *
+     * Collect state updates safely within coroutine scope bound to UI lifecycle to prevent leaks.
      */
     private fun observeSessionState() {
         lifecycleScope.launch {
@@ -177,4 +179,3 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         private const val TAG = "FidoUriHandlerActivity"
     }
 }
-

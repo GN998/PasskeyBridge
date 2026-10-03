@@ -22,10 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
- * Coordinate caBLE v2 Passkey session lifecycle across transport, cryptography, storage, and CredentialManager.
+ * Orchestrate caBLE v2 Passkey session lifecycle across transport, cryptography, storage, and CredentialManager.
  *
- * Serve as the single entry point for orchestrating QR-initiated ad-hoc transactions and State-assisted
- * re-connections, maintaining unified session state and persisting client pairing data.
+ * Serve as the central facade for coordinating QR-initiated ad-hoc transactions and State-assisted
+ * re-connections, maintaining unified session state and persisting client pairing metadata.
  */
 class BridgeSessionController(
     private val context: Context,
@@ -38,12 +38,12 @@ class BridgeSessionController(
     private val _sessionState = MutableStateFlow<BridgeSessionState>(BridgeSessionState.Idle)
     
     /**
-     * Expose a observable flow of session lifecycle state transitions.
+     * Expose an observable flow of session lifecycle state transitions.
      */
     val sessionState: StateFlow<BridgeSessionState> = _sessionState.asStateFlow()
 
     /**
-     * Backward-compatible callback for simple text status updates.
+     * Maintain backward compatibility with text-based status listeners.
      */
     var onStatusUpdate: ((String) -> Unit)? = null
 
@@ -63,9 +63,9 @@ class BridgeSessionController(
     }
 
     /**
-     * Process a scanned FIDO QR code payload and launch a KNpsk0 caBLE session.
+     * Launch a KNpsk0 caBLE session initialized by scanning a client platform QR code.
      *
-     * Derive tunnel keys, open WebSocket tunnel, broadcast 20-byte BLE EID, and dispatch incoming
+     * Derive tunnel keys, open a WebSocket tunnel, broadcast a 20-byte BLE EID, and dispatch incoming
      * CTAP requests to CredentialManager.
      *
      * @param peerPublicKey Client platform ephemeral public key extracted from QR.
@@ -87,13 +87,13 @@ class BridgeSessionController(
     /**
      * Launch a State-assisted reconnection session for a previously paired client platform.
      *
-     * Lookup persistent pairing record by linkId, initialize NKpsk0 Noise handshake, and broadcast
-     * 15-byte BLE Nonce without requiring QR scan.
+     * Query persistent pairing record by linkId, retrieve hardware-backed IdentityKey, initialize
+     * NKpsk0 Noise handshake, and broadcast a 15-byte BLE Nonce without requiring a QR scan.
      *
      * @param linkId 8-byte pairing identifier.
      */
     fun startStateAssistedSession(linkId: ByteArray) {
-        val record = linkingRepository.getLinkingRecord(linkId)
+        val record = linkingRepository.getLinkingRecordByLinkId(linkId)
         if (record == null) {
             val errorMsg = "No persistent pairing record found for linkId: ${linkId.joinToString("") { "%02x".format(it) }}"
             Log.e(TAG, errorMsg)
@@ -101,12 +101,14 @@ class BridgeSessionController(
             return
         }
 
-        val identityKey = linkingRepository.getOrCreateDeviceIdentityKey()
+        val identityKey = linkingRepository.getOrCreateIdentityKeyPair()
         startStateAssistedSessionInternal(record, identityKey)
     }
 
     /**
      * Launch a State-assisted reconnection session matching a given push notification contactId.
+     *
+     * Query persistent pairing record by contactId, retrieve hardware-backed IdentityKey, and launch session.
      *
      * @param contactId Push notification contact token bytes.
      */
@@ -119,12 +121,14 @@ class BridgeSessionController(
             return
         }
 
-        val identityKey = linkingRepository.getOrCreateDeviceIdentityKey()
+        val identityKey = linkingRepository.getOrCreateIdentityKeyPair()
         startStateAssistedSessionInternal(record, identityKey)
     }
 
     /**
-     * Explicitly save or update a caBLE v2 client pairing record after successful initial transaction.
+     * Persist or update a caBLE v2 client pairing record after establishing a new connection.
+     *
+     * Save metadata to encrypted storage and notify state observers of pairing persistence.
      *
      * @param record Pairing metadata to persist in secure storage.
      */
@@ -135,14 +139,14 @@ class BridgeSessionController(
     }
 
     /**
-     * Retrieve all active client pairing records persisted on this device.
+     * Query all active client pairing records persisted on this device.
      */
     fun getActivePairings(): List<LinkingRecord> {
         return linkingRepository.getAllLinkingRecords()
     }
 
     /**
-     * Stop active BLE advertising, disconnect WebSocket tunnels, and return to idle state.
+     * Stop active BLE advertising, disconnect WebSocket tunnels, and reset state to Idle.
      */
     fun stopSession() {
         transportManager?.stopSession()
@@ -151,7 +155,7 @@ class BridgeSessionController(
     }
 
     /**
-     * Execute internal State-assisted session launch.
+     * Execute internal State-assisted session launch logic.
      */
     private fun startStateAssistedSessionInternal(
         record: LinkingRecord,
@@ -165,7 +169,7 @@ class BridgeSessionController(
     }
 
     /**
-     * Decode CTAP2 request, dispatch to CredentialManager on Main thread, and encode response.
+     * Decode incoming CTAP2 request, dispatch execution to CredentialManager on Main thread, and encode response.
      */
     private fun processRawCtapRequest(rawCtapRequest: ByteArray): ByteArray {
         var responseBytes = byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
@@ -208,4 +212,3 @@ class BridgeSessionController(
         private const val TAG = "BridgeSessionController"
     }
 }
-
