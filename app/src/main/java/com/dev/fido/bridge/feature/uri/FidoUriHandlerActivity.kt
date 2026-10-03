@@ -177,3 +177,4 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         private const val TAG = "FidoUriHandlerActivity"
     }
 }
+

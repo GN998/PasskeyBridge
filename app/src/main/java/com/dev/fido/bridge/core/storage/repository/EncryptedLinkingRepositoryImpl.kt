@@ -218,3 +218,4 @@ class EncryptedLinkingRepositoryImpl(
         private const val KEY_SW_PRIV_KEY = "key_sw_identity_priv_key"
     }
 }
+
