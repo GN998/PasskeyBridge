@@ -17,6 +17,34 @@ class CtapCodecException(
 
 object CtapCodec {
 
+    /**
+     * Construct the CBOR-encoded post-handshake advertisement message required by CTAP 2.3 §6.4 & §11.5.
+     *
+     * Encapsulate CTAP capability metadata (supported protocol versions, authenticator options, and
+     * "hybrid" transport binding) in the codec layer to prevent CTAP protocol details from leaking
+     * into generic transport managers.
+     */
+    fun buildPostHandshakePayload(): ByteArray {
+        val getInfoMap = mapOf(
+            1L to listOf("FIDO_2_0", "FIDO_2_1", "FIDO_2_3"),
+            3L to ByteArray(16),
+            4L to mapOf("rk" to true, "up" to true, "uv" to true, "plat" to false),
+            9L to listOf("internal", "hybrid")
+        )
+        val getInfoBytes = SimpleCbor.write(getInfoMap)
+        val postHandshakeMap = mapOf(
+            1L to getInfoBytes,
+            3L to listOf("dc", "ctap")
+        )
+        return SimpleCbor.write(postHandshakeMap)
+    }
+
+    /**
+     * Decode a raw CTAP request byte array into a strongly-typed [Ctap2Request] domain model.
+     *
+     * Inspect the leading command byte to select the appropriate request decoder according
+     * to CTAP2 message framing specifications.
+     */
     fun decodeRequest(rawPayload: ByteArray): Ctap2Request {
         if (rawPayload.isEmpty()) {
             throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Empty CTAP payload")
@@ -59,7 +87,7 @@ object CtapCodec {
 
             val pubKeyCredParamsRaw = map[4L] as? List<*> ?: emptyList<Any>()
 
-            // Safely validate required fields 'type' and 'alg' without non-null assertions (!!)
+            // Safely validate required fields 'type' and 'alg' without non-null assertions
             val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
                 val paramMap = item as? Map<*, *>
                     ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
@@ -124,6 +152,9 @@ object CtapCodec {
         }
     }
 
+    /**
+     * Encode a [Ctap2Response] into a status-prefixed raw CBOR byte array ready for network framing.
+     */
     fun encodeResponse(response: Ctap2Response): ByteArray {
         return when (response) {
             is Ctap2Response.ErrorResponse -> byteArrayOf(response.errorCode)
@@ -160,7 +191,9 @@ object CtapCodec {
         }
     }
 
-    // A lightweight, dependency-free CBOR encoder/decoder optimized for FIDO structures
+    /**
+     * Lightweight, dependency-free CBOR encoder and decoder optimized for FIDO data structures.
+     */
     object SimpleCbor {
         fun read(bytes: ByteArray): Any? {
             var pos = 0

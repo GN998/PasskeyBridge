@@ -2,12 +2,17 @@ package com.dev.fido.bridge.core.transport
 
 import android.util.Log
 import com.dev.fido.bridge.BuildConfig
-import com.dev.fido.bridge.core.ctap.codec.CtapCodec
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
 import com.dev.fido.bridge.core.transport.websocket.TunnelWebsocket
 
+/**
+ * Manage transport-layer lifecycle across BLE advertising and WebSocket tunneling.
+ *
+ * Decouple transport orchestration from upper-level application protocols (e.g., CTAP) by operating
+ * purely on encrypted byte streams and delegating protocol-specific payload construction to callbacks.
+ */
 class TransportManager(
     private val bleAdvertiser: HybridBleAdvertiser
 ) {
@@ -16,10 +21,17 @@ class TransportManager(
     
     var onStatusUpdate: ((String) -> Unit)? = null
 
+    /**
+     * Start a hybrid transport session using ephemeral routing IDs and Noise KNpsk0 handshake parameters.
+     *
+     * Accept a payload provider callback for post-handshake messaging to isolate upper-layer CTAP CBOR
+     * structures from transport socket and BLE advertisement logic.
+     */
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
         domainId: Int = BuildConfig.TUNNEL_ID,
+        onPostHandshakePayloadProvider: () -> ByteArray,
         onRequestReceived: (ByteArray) -> ByteArray
     ) {
         val uncompressedPeerKey = CryptoHelper.decompressECKey(peerPublicKey)
@@ -36,10 +48,9 @@ class TransportManager(
             domainId = domainId,
             ephemeralTunnelId = ephemeralTunnelId,
             onConnected = { routingId ->
-                // 1. Generate the single 16-byte advertPlaintext seed (containing timestamp, routingId, domainId)
+                // Derive advertisement seed and Noise PSK using CTAP2 hybrid specifications
                 val advertPlaintext = CryptoHelper.generateSeed(routingId, domainId)
 
-                // 2. Derive 64-byte eidKey from qrSecret (psk)
                 val eidKey = CryptoHelper.endif(
                     ikm = psk,
                     salt = ByteArray(0),
@@ -47,10 +58,8 @@ class TransportManager(
                     length = 64
                 )
 
-                // 3. Encrypt the EXACT advertPlaintext seed to 20-byte BLE EID
                 val finalEid = CryptoHelper.generateEid(eidKey, advertPlaintext)
 
-                // 4. Derive 32-byte Noise PSK using the EXACT same advertPlaintext
                 val noisePsk = CryptoHelper.endif(
                     ikm = psk,
                     salt = advertPlaintext,
@@ -58,10 +67,9 @@ class TransportManager(
                     length = 32
                 )
 
-                // 5. Initialize Noise KNpsk0 state machine with derived noisePsk
+                // Initialize Noise state machine and initiate BLE advertisement for proximity binding
                 noiseSession.initializeHandshake(noisePsk)
 
-                // 6. Start BLE advertising with finalEid
                 bleAdvertiser.startAdvertising(finalEid)
                 onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
             },
@@ -76,7 +84,8 @@ class TransportManager(
                         Log.d("TransportManager", msg)
                         onStatusUpdate?.invoke(msg)
                         
-                        val postHandshakeMsg = buildPostHandshakeMessage()
+                        // Obtain upper-layer protocol payload via callback to maintain transport decoupling
+                        val postHandshakeMsg = onPostHandshakePayloadProvider()
                         tunnelWebsocket?.sendFrame(noiseSession.encrypt(postHandshakeMsg))
                     } else {
                         val decrypted = noiseSession.decrypt(encryptedFrame)
@@ -111,24 +120,11 @@ class TransportManager(
         tunnelWebsocket?.connect()
     }
 
+    /**
+     * Terminate active transport operations including BLE advertising and WebSocket socket connections.
+     */
     fun stopSession() {
         bleAdvertiser.stopAdvertising()
         tunnelWebsocket?.close()
-    }
-
-    private fun buildPostHandshakeMessage(): ByteArray {
-        val getInfoMap = mapOf(
-            // Fix for Bug 6: Include "FIDO_2_3" in versions and update transport string "cable" to "hybrid" per CTAP 2.3 §6.4 & §11.5
-            1L to listOf("FIDO_2_0", "FIDO_2_1", "FIDO_2_3"),
-            3L to ByteArray(16), 
-            4L to mapOf("rk" to true, "up" to true, "uv" to true, "plat" to false),
-            9L to listOf("internal", "hybrid")
-        )
-        val getInfoBytes = CtapCodec.SimpleCbor.write(getInfoMap)
-        val postHandshakeMap = mapOf(
-            1L to getInfoBytes,
-            3L to listOf("dc", "ctap")
-        )
-        return CtapCodec.SimpleCbor.write(postHandshakeMap)
     }
 }
