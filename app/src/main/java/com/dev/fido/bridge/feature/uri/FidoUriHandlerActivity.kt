@@ -11,31 +11,44 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
+import com.dev.fido.bridge.core.storage.repository.EncryptedLinkingRepositoryImpl
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.feature.session.BridgeSessionController
+import com.dev.fido.bridge.feature.session.BridgeSessionState
 import kotlinx.coroutines.launch
 
+/**
+ * Handle incoming FIDO URIs, QR code intents, and caBLE v2 push notifications.
+ *
+ * Initialize transport layers, observe BridgeSessionState transitions, and route incoming intents
+ * to either QR-initiated or State-assisted passkey bridge sessions.
+ */
 class FidoUriHandlerActivity : AppCompatActivity() {
 
-    private lateinit var tv: TextView
+    private lateinit var tvStatus: TextView
     private lateinit var sessionController: BridgeSessionController
     private val PERMISSION_REQUEST_CODE = 1001
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        tv = TextView(this).apply {
-            text = "Passkey Bridge\nProcessing FIDO URI..."
-            textSize = 18f
-            setPadding(50, 100, 50, 0)
+        tvStatus = TextView(this).apply {
+            text = "Passkey Bridge\nInitializing session..."
+            textSize = 16f
+            setPadding(40, 80, 40, 40)
         }
-        setContentView(tv)
-        
+        setContentView(tvStatus)
+
         checkAndRequestPermissions()
     }
 
+    /**
+     * Check runtime permissions required for BLE advertising and Bluetooth connection.
+     */
     private fun checkAndRequestPermissions() {
         val permissions = listOf(
             Manifest.permission.BLUETOOTH_ADVERTISE,
@@ -55,7 +68,11 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
             initializeController()
@@ -63,6 +80,9 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Construct transport dependencies and launch reactive session state observer.
+     */
     private fun initializeController() {
         if (::sessionController.isInitialized) return
 
@@ -72,12 +92,52 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
         val hybridBleAdvertiser = HybridBleAdvertiser(bleAdvertiser)
         val transportManager = TransportManager(hybridBleAdvertiser)
-        
-        sessionController = BridgeSessionController(this, transportManager)
-        
-        // Append background network and crypto status directly to UI TextView
+        val linkingRepository = EncryptedLinkingRepositoryImpl(this)
+
+        sessionController = BridgeSessionController(this, transportManager, linkingRepository)
+
         sessionController.onStatusUpdate = { status ->
-            tv.append("\n➜ $status")
+            tvStatus.append("\n➜ $status")
+        }
+
+        observeSessionState()
+    }
+
+    /**
+     * Observe reactive [BridgeSessionState] lifecycle events.
+     */
+    private fun observeSessionState() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                sessionController.sessionState.collect { state ->
+                    when (state) {
+                        is BridgeSessionState.Idle -> {
+                            Log.d(TAG, "Session State: Idle")
+                        }
+                        is BridgeSessionState.QrSessionInitiated -> {
+                            tvStatus.append("\n[State] QR Session Initiated (Domain ID: ${state.domainId})")
+                        }
+                        is BridgeSessionState.StateAssistedSessionInitiated -> {
+                            tvStatus.append("\n[State] State-assisted Session Initiated for paired client")
+                        }
+                        is BridgeSessionState.TransportConnected -> {
+                            tvStatus.append("\n[State] BLE Advertising & WebSocket Tunnel Active")
+                        }
+                        is BridgeSessionState.HandshakeCompleted -> {
+                            tvStatus.append("\n[State] Noise Cryptographic Handshake Complete")
+                        }
+                        is BridgeSessionState.ProcessingCtapRequest -> {
+                            tvStatus.append("\n[State] Executing CTAP Command: ${state.commandName}")
+                        }
+                        is BridgeSessionState.PairingPersisted -> {
+                            tvStatus.append("\n[State] Client Pairing Saved (LinkID: ${state.record.linkIdHex})")
+                        }
+                        is BridgeSessionState.Error -> {
+                            tvStatus.append("\n[Error] ${state.message}")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -88,30 +148,32 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Parse incoming Intent data and route to QR scan or State-assisted reconnection flow.
+     */
     private fun handleIntent(intent: Intent?) {
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
-        
+
         if (uriString != null) {
-            tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
+            tvStatus.text = "Captured FIDO URI:\n$uriString\n\nParsing payload..."
+
             val qrData = HybridQrParser.parse(uriString)
-            
             if (qrData != null) {
-                tv.append("\n\nParsed successfully. Routing to CTAP Dispatcher...")
-                
-                lifecycleScope.launch {
-                    try {
-                        sessionController.onQrCodeScanned(qrData.publicKey, qrData.secret)
-                        tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
-                    } catch (e: Exception) {
-                        Log.e("FidoUriHandler", "Error starting session", e)
-                        tv.append("\n\nError: ${e.message}")
-                    }
-                }
+                tvStatus.append("\nParsed FIDO QR Data successfully. Starting QR Session...")
+                sessionController.onQrCodeScanned(qrData.publicKey, qrData.secret)
             } else {
-                tv.append("\n\nInvalid or unsupported FIDO URI.")
+                tvStatus.append("\nFailed to parse FIDO QR URI.")
             }
-        } else {
-            tv.text = "No URI provided. Waiting for FIDO URI intent.\nMake sure you scan a valid FIDO QR code."
+        } else if (intent?.hasExtra("cable_link_id") == true) {
+            val linkId = intent.getByteArrayExtra("cable_link_id")
+            if (linkId != null) {
+                tvStatus.text = "Received caBLE Reconnection Trigger for LinkID: ${linkId.joinToString("") { "%02x".format(it) }}"
+                sessionController.startStateAssistedSession(linkId)
+            }
         }
+    }
+
+    companion object {
+        private const val TAG = "FidoUriHandlerActivity"
     }
 }
