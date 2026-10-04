@@ -6,6 +6,10 @@ import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
 import com.dev.fido.bridge.core.transport.websocket.TunnelWebsocket
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Manage transport-layer lifecycle across BLE advertising and WebSocket tunneling.
@@ -18,21 +22,22 @@ class TransportManager(
 ) {
     private val noiseSession = NoiseSession()
     private var tunnelWebsocket: TunnelWebsocket? = null
+    private val transportScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     var onStatusUpdate: ((String) -> Unit)? = null
 
     /**
      * Start a hybrid transport session using ephemeral routing IDs and Noise KNpsk0 handshake parameters.
      *
-     * Accept a payload provider callback for post-handshake messaging to isolate upper-layer CTAP CBOR
-     * structures from transport socket and BLE advertisement logic.
+     * Accept suspending callbacks for request processing to ensure network message processing thread
+     * remains unblocked while asynchronous security operations execute.
      */
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
         domainId: Int = BuildConfig.TUNNEL_ID,
         onPostHandshakePayloadProvider: () -> ByteArray,
-        onRequestReceived: (ByteArray) -> ByteArray
+        onRequestReceived: suspend (ByteArray) -> ByteArray
     ) {
         val uncompressedPeerKey = CryptoHelper.decompressECKey(peerPublicKey)
         noiseSession.setPeerPublicKey(uncompressedPeerKey)
@@ -74,43 +79,47 @@ class TransportManager(
                 onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
             },
             onMessageReceived = { encryptedFrame ->
-                try {
-                    if (!noiseSession.isHandshakeComplete) {
-                        Log.d("TransportManager", "Received ClientHello, processing Noise KNpsk0 handshake...")
-                        val serverHello = noiseSession.processClientHelloAndGenerateServerHello(encryptedFrame)
-                        tunnelWebsocket?.sendFrame(serverHello)
-                        
-                        val msg = "Noise KNpsk0 Handshake Success!\nSent Post-Handshake Message."
-                        Log.d("TransportManager", msg)
-                        onStatusUpdate?.invoke(msg)
-                        
-                        // Obtain upper-layer protocol payload via callback to maintain transport decoupling
-                        val postHandshakeMsg = onPostHandshakePayloadProvider()
-                        tunnelWebsocket?.sendFrame(noiseSession.encrypt(postHandshakeMsg))
-                    } else {
-                        val decrypted = noiseSession.decrypt(encryptedFrame)
-                        if (decrypted.isEmpty()) return@TunnelWebsocket
-                        
-                        val frameType = decrypted[0].toInt() and 0xFF
-                        when (frameType) {
-                            0x01 -> {
-                                val logMsg = "Received CTAP Request!"
-                                Log.d("TransportManager", logMsg)
-                                onStatusUpdate?.invoke(logMsg)
-                                
-                                val ctapReq = decrypted.copyOfRange(1, decrypted.size)
-                                val response = onRequestReceived(ctapReq)
-                                val framedResponse = byteArrayOf(0x01) + response
-                                tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+                // Dispatch frame processing asynchronously to prevent blocking WebSocket message handler
+                transportScope.launch {
+                    try {
+                        if (!noiseSession.isHandshakeComplete) {
+                            Log.d("TransportManager", "Received ClientHello, processing Noise KNpsk0 handshake...")
+                            val serverHello = noiseSession.processClientHelloAndGenerateServerHello(encryptedFrame)
+                            tunnelWebsocket?.sendFrame(serverHello)
+                            
+                            val msg = "Noise KNpsk0 Handshake Success!\nSent Post-Handshake Message."
+                            Log.d("TransportManager", msg)
+                            onStatusUpdate?.invoke(msg)
+                            
+                            // Obtain upper-layer protocol payload via callback to maintain transport decoupling
+                            val postHandshakeMsg = onPostHandshakePayloadProvider()
+                            tunnelWebsocket?.sendFrame(noiseSession.encrypt(postHandshakeMsg))
+                        } else {
+                            val decrypted = noiseSession.decrypt(encryptedFrame)
+                            if (decrypted.isEmpty()) return@launch
+                            
+                            val frameType = decrypted[0].toInt() and 0xFF
+                            when (frameType) {
+                                0x01 -> {
+                                    val logMsg = "Received CTAP Request!"
+                                    Log.d("TransportManager", logMsg)
+                                    onStatusUpdate?.invoke(logMsg)
+                                    
+                                    val ctapReq = decrypted.copyOfRange(1, decrypted.size)
+                                    // Await asynchronous request handler without blocking background threads
+                                    val response = onRequestReceived(ctapReq)
+                                    val framedResponse = byteArrayOf(0x01) + response
+                                    tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+                                }
+                                0x00 -> Log.d("TransportManager", "Received Control/ACK message")
+                                else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
                             }
-                            0x00 -> Log.d("TransportManager", "Received Control/ACK message")
-                            else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
                         }
+                    } catch (e: Exception) {
+                        val msg = "Frame Error: ${e.message}"
+                        Log.e("TransportManager", msg, e)
+                        onStatusUpdate?.invoke(msg)
                     }
-                } catch (e: Exception) {
-                    val msg = "Frame Error: ${e.message}"
-                    Log.e("TransportManager", msg, e)
-                    onStatusUpdate?.invoke(msg)
                 }
             },
             onStatusUpdate = { status ->
