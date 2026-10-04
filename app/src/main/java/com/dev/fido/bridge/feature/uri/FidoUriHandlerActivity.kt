@@ -1,41 +1,57 @@
 package com.dev.fido.bridge.feature.uri
 
 import android.Manifest
-import android.bluetooth.BluetoothManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.util.Log
 import android.widget.TextView
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import com.dev.fido.bridge.core.hybrid.HybridQrParser
-import com.dev.fido.bridge.core.transport.TransportManager
-import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
-import com.dev.fido.bridge.feature.session.BridgeSessionController
-import kotlinx.coroutines.launch
 
+/**
+ * Handle user permissions and display authentication status for FIDO deep-link intents.
+ *
+ * Keep UI logic strictly lean by delegating URI parsing and session lifecycle management
+ * to [FidoUriHandlerViewModel], ensuring Android UI components only handle runtime permission
+ * requests and text view rendering.
+ */
 class FidoUriHandlerActivity : AppCompatActivity() {
 
     private lateinit var tv: TextView
-    private lateinit var sessionController: BridgeSessionController
-    private val PERMISSION_REQUEST_CODE = 1001
+    private val viewModel: FidoUriHandlerViewModel by viewModels()
+
+    companion object {
+        private const val PERMISSION_REQUEST_CODE = 1001
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
         tv = TextView(this).apply {
             text = "Passkey Bridge\nProcessing FIDO URI..."
             textSize = 18f
             setPadding(50, 100, 50, 0)
         }
         setContentView(tv)
-        
+
+        observeViewModel()
         checkAndRequestPermissions()
     }
 
+    /**
+     * Bind LiveData from ViewModel to observe status updates and reflect background progression in UI.
+     */
+    private fun observeViewModel() {
+        viewModel.statusText.observe(this) { status ->
+            tv.text = status
+        }
+    }
+
+    /**
+     * Ensure mandatory BLE and Location permissions are granted before triggering session processing.
+     */
     private fun checkAndRequestPermissions() {
         val permissions = listOf(
             Manifest.permission.BLUETOOTH_ADVERTISE,
@@ -50,68 +66,31 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         if (missingPermissions.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
         } else {
-            initializeController()
-            handleIntent(intent)
+            handleIncomingIntent(intent)
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            initializeController()
-            handleIntent(intent)
-        }
-    }
-
-    private fun initializeController() {
-        if (::sessionController.isInitialized) return
-
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val bluetoothAdapter = bluetoothManager.adapter
-        val bleAdvertiser = bluetoothAdapter?.bluetoothLeAdvertiser
-
-        val hybridBleAdvertiser = HybridBleAdvertiser(bleAdvertiser)
-        val transportManager = TransportManager(hybridBleAdvertiser)
-        
-        sessionController = BridgeSessionController(this, transportManager)
-        
-        // Append background network and crypto status directly to UI TextView
-        sessionController.onStatusUpdate = { status ->
-            tv.append("\n➜ $status")
+            handleIncomingIntent(intent)
         }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
-        if (::sessionController.isInitialized) {
-            handleIntent(intent)
-        }
+        handleIncomingIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    /**
+     * Extract URI string from intent extras or data payload and delegate processing to ViewModel.
+     */
+    private fun handleIncomingIntent(intent: Intent?) {
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
-        
-        if (uriString != null) {
-            tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
-            val qrData = HybridQrParser.parse(uriString)
-            
-            if (qrData != null) {
-                tv.append("\n\nParsed successfully. Routing to CTAP Dispatcher...")
-                
-                lifecycleScope.launch {
-                    try {
-                        sessionController.onQrCodeScanned(qrData.publicKey, qrData.secret)
-                        tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
-                    } catch (e: Exception) {
-                        Log.e("FidoUriHandler", "Error starting session", e)
-                        tv.append("\n\nError: ${e.message}")
-                    }
-                }
-            } else {
-                tv.append("\n\nInvalid or unsupported FIDO URI.")
-            }
-        } else {
-            tv.text = "No URI provided. Waiting for FIDO URI intent.\nMake sure you scan a valid FIDO QR code."
-        }
+        viewModel.processFidoUri(uriString)
     }
 }
