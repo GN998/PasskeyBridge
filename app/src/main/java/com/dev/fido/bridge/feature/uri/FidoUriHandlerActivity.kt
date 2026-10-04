@@ -81,7 +81,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    /**
+     * Receive new intent delivered to this singleTop Activity and forward to ViewModel for processing.
+     *
+     * Match non-null [Intent] signature required by ComponentActivity/AppCompatActivity override.
+     */
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncomingIntent(intent)
     }
