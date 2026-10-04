@@ -26,13 +26,11 @@ android {
     namespace = "com.dev.fido.bridge"
     compileSdk = 34
 
-    // Add signingConfigs for fixed certificate
     signingConfigs {
         create("fixedConfig") {
             val keystoreFile = rootProject.file("my-release-key.jks")
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
-                // Prioritize environment variables (CI), fallback to local.properties (local dev)
                 storePassword = System.getenv("STORE_PASSWORD") ?: localProperties.getProperty("STORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS") ?: localProperties.getProperty("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD") ?: localProperties.getProperty("KEY_PASSWORD")
@@ -52,12 +50,10 @@ android {
     }
 
     buildTypes {
-        // Apply fixedConfig to debug build
         getByName("debug") {
             signingConfig = signingConfigs.getByName("fixedConfig")
         }
         release {
-            // Apply fixedConfig to release build
             signingConfig = signingConfigs.getByName("fixedConfig")
             isMinifyEnabled = true
             isShrinkResources = true
@@ -88,8 +84,16 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
+    /**
+     * Include AndroidX Activity KTX extension library to provide the `by viewModels()` property delegate.
+     *
+     * Decouple Activity UI rendering from ViewModel lifecycle management without manual Factory boilerplate,
+     * preventing compilation failures during Kotlin release builds.
+     */
+    implementation("androidx.activity:activity-ktx:1.9.0")
+
     // Android 14 CredentialManager (Core API)
-    // Removed legacy credentials-play-services-auth transitive dependency to prevent unwanted GMS permissions
+    // Omit legacy credentials-play-services-auth transitive dependency to avoid unnecessary GMS permissions
     implementation("androidx.credentials:credentials:1.3.0-alpha04")
 
     // kotlinx.serialization
@@ -100,6 +104,4 @@ dependencies {
     // Coroutines & WebSockets
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
-    // Note: CameraX & ZXing dependencies removed for Step 1 (External FIDO URI integration)
 }
