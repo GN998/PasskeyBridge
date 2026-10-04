@@ -49,7 +49,7 @@ class FidoUriHandlerViewModel(application: Application) : AndroidViewModel(appli
         appendStatus("Parsed successfully. Routing to CTAP Dispatcher...")
 
         try {
-            initializeAndStartSession(qrData.publicKey, qrData.secret, qrData.tunnelServerId)
+            initializeAndStartSession(qrData.publicKey, qrData.secret, BuildConfig.TUNNEL_ID)
             appendStatus("Session initiated.\nBLE Advertising & WebSocket connecting...")
         } catch (e: Exception) {
             Log.e("FidoUriHandlerViewModel", "Failed to start FIDO session", e)
