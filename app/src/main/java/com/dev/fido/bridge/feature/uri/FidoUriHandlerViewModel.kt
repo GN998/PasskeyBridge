@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
@@ -49,7 +50,9 @@ class FidoUriHandlerViewModel(application: Application) : AndroidViewModel(appli
         appendStatus("Parsed successfully. Routing to CTAP Dispatcher...")
 
         try {
-            initializeAndStartSession(qrData.publicKey, qrData.secret, qrData.tunnelServerId)
+            // Override the QR-embedded tunnel server ID with the locally configured BuildConfig.TUNNEL_ID
+            // to route transport connections to the self-hosted tunnel infrastructure instead of public endpoints.
+            initializeAndStartSession(qrData.publicKey, qrData.secret, BuildConfig.TUNNEL_ID)
             appendStatus("Session initiated.\nBLE Advertising & WebSocket connecting...")
         } catch (e: Exception) {
             Log.e("FidoUriHandlerViewModel", "Failed to start FIDO session", e)
