@@ -43,21 +43,21 @@ object CryptoUtils {
     /**
      * Decode URL-safe Base64 strings into raw byte arrays safely without truncation.
      *
-     * Sanitize Base64URL input strings by removing whitespace, restoring standard URL-safe padding,
-     * and employing URL_SAFE decoding flags with fallback logic to prevent premature character truncation
-     * during WebAuthn assertion signature parsing.
+     * Normalize the WebAuthn Base64URL alphabet (RFC 4648) to standard Base64 and restore missing 
+     * padding to prevent the Android Base64 decoder from silently discarding non-alphabet bytes,
+     * guaranteeing exact byte-for-byte fidelity during assertion signature and credential ID parsing.
      */
     fun decodeBase64Url(base64Str: String): ByteArray {
         var cleanStr = base64Str.trim().replace('-', '+').replace('_', '/')
+        
         val pad = cleanStr.length % 4
         if (pad > 0) {
             cleanStr += "=".repeat(4 - pad)
         }
-        return try {
-            Base64.decode(cleanStr, Base64.URL_SAFE or Base64.NO_WRAP)
-        } catch (_: Exception) {
-            Base64.decode(cleanStr, Base64.DEFAULT or Base64.NO_WRAP)
-        }
+        
+        // Utilize the DEFAULT decoder flag to process the explicitly normalized standard alphabet, 
+        // bypassing Android's URL_SAFE parser which silently drops '+' and '/' characters without throwing.
+        return Base64.decode(cleanStr, Base64.DEFAULT or Base64.NO_WRAP)
     }
 
     /**
