@@ -14,9 +14,19 @@ import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.security.CryptoUtils
 import org.json.JSONObject
 
+/**
+ * Delegate FIDO CTAP2 requests to Android CredentialManager system services.
+ *
+ * Map CTAP2 GetAssertion and MakeCredential requests into native WebAuthn JSON payloads,
+ * invoking Android CredentialManager to perform biometric/PIN user verification and retrieve
+ * public-key credentials.
+ */
 class CredentialManagerProxy(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
 
+    /**
+     * Dispatch incoming CTAP2 requests to corresponding CredentialManager handlers.
+     */
     suspend fun handleCtapRequest(request: Ctap2Request): Ctap2Response {
         return when (request) {
             is Ctap2Request.GetInfo -> AuthenticatorInfo.getInfo()
@@ -25,6 +35,13 @@ class CredentialManagerProxy(private val context: Context) {
         }
     }
 
+    /**
+     * Execute WebAuthn assertion retrieval via Android CredentialManager.
+     *
+     * Dynamically resolve the actual credential ID selected during user authentication from the
+     * response JSON payload before falling back to the request allowList. This prevents credential ID
+     * mismatches in multi-account environments where the user chooses a non-first credential.
+     */
     private suspend fun handleGetAssertion(req: Ctap2Request.GetAssertion): Ctap2Response {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
@@ -33,7 +50,6 @@ class CredentialManagerProxy(private val context: Context) {
             requestJson = jsonRequest,
             clientDataHash = req.clientDataHash
         )
-        // Call setOrigin on GetCredentialRequest.Builder
         val getReq = GetCredentialRequest.Builder()
             .addCredentialOption(option)
             .setOrigin(trustedOrigin)
@@ -43,21 +59,29 @@ class CredentialManagerProxy(private val context: Context) {
         if (result.credential is PublicKeyCredential) {
             val pubKeyCredential = result.credential as PublicKeyCredential
             val responseJson = pubKeyCredential.authenticationResponseJson
-            // Fix for Bug 5: Extract credential ID from allowList or parse authenticationResponseJson (Passkey / discoverable credentials)
-            val credId = req.allowList?.firstOrNull()?.id?.takeIf { it.isNotEmpty() }
-                ?: try {
-                    val responseObj = JSONObject(responseJson)
-                    val idStr = responseObj.optString("id", "").ifEmpty { responseObj.optString("rawId", "") }
-                    if (idStr.isNotEmpty()) CryptoUtils.decodeBase64Url(idStr) else ByteArray(0)
-                } catch (e: Exception) {
-                    ByteArray(0)
+
+            // Dynamically resolve actual chosen credential ID from response JSON before falling back to allowList
+            val credId = try {
+                val responseObj = JSONObject(responseJson)
+                val idStr = responseObj.optString("id", "").ifEmpty { responseObj.optString("rawId", "") }
+                if (idStr.isNotEmpty()) {
+                    CryptoUtils.decodeBase64Url(idStr)
+                } else {
+                    req.allowList?.firstOrNull()?.id ?: ByteArray(0)
                 }
+            } catch (_: Exception) {
+                req.allowList?.firstOrNull()?.id ?: ByteArray(0)
+            }
+
             return CtapMapper.parseAssertionResponseJson(responseJson, credId)
         } else {
             return Ctap2Response.ErrorResponse(0x31)
         }
     }
 
+    /**
+     * Execute WebAuthn credential registration via Android CredentialManager.
+     */
     private suspend fun handleMakeCredential(req: Ctap2Request.MakeCredential): Ctap2Response {
         val jsonRequest = CtapMapper.toWebAuthnCreateCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"

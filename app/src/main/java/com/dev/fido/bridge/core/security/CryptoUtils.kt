@@ -41,10 +41,11 @@ object CryptoUtils {
     }
 
     /**
-     * Decode URL-safe Base64 strings into raw byte arrays.
+     * Decode URL-safe Base64 strings into raw byte arrays safely without truncation.
      *
-     * Normalize URL-safe characters ('-' and '_') and restore missing trailing '=' padding characters
-     * before decoding to accept flexible web client inputs without throwing parsing exceptions.
+     * Sanitize Base64URL input strings by removing whitespace, restoring standard URL-safe padding,
+     * and employing URL_SAFE decoding flags with fallback logic to prevent premature character truncation
+     * during WebAuthn assertion signature parsing.
      */
     fun decodeBase64Url(base64Str: String): ByteArray {
         var cleanStr = base64Str.trim().replace('-', '+').replace('_', '/')
@@ -52,7 +53,11 @@ object CryptoUtils {
         if (pad > 0) {
             cleanStr += "=".repeat(4 - pad)
         }
-        return Base64.decode(cleanStr, Base64.DEFAULT or Base64.NO_WRAP)
+        return try {
+            Base64.decode(cleanStr, Base64.URL_SAFE or Base64.NO_WRAP)
+        } catch (_: Exception) {
+            Base64.decode(cleanStr, Base64.DEFAULT or Base64.NO_WRAP)
+        }
     }
 
     /**
