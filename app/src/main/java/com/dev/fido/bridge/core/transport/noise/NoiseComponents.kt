@@ -1,65 +1,39 @@
 package com.dev.fido.bridge.core.transport.noise
 
-import java.security.KeyFactory
+import com.dev.fido.bridge.core.security.CryptoUtils
 import java.security.MessageDigest
 import java.security.interfaces.ECPrivateKey
-import java.security.interfaces.ECPublicKey
-import java.security.spec.ECPoint
-import java.security.spec.ECPublicKeySpec
-import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import kotlin.math.ceil
 
 const val HKDF_ALGORITHM = "HmacSHA256"
 const val AEMK_ALGORITHM = "AES"
 const val EC_ALGORITHM = "EC"
 
+/**
+ * Provide Noise handshake cryptographic operations and caBLE v2 EID generation helpers.
+ *
+ * Delegate foundational cryptographic primitives (HKDF, ECDH, EC decompression) to [CryptoUtils]
+ * to establish a single source of truth in core:security while retaining transport-specific EID formatting.
+ */
 object CryptoHelper {
-    // Decompress 33-byte EC public key to 65-byte uncompressed format
+
+    /**
+     * Decompress 33-byte EC public key by delegating to [CryptoUtils].
+     */
     fun decompressECKey(compressed: ByteArray): ByteArray {
-        if (compressed.size == 65 && compressed[0] == 0x04.toByte()) return compressed
-        if (compressed.size != 33) return compressed
-
-        val prefix = compressed[0].toInt()
-        val xBytes = compressed.copyOfRange(1, 33)
-        val x = java.math.BigInteger(1, xBytes)
-
-        val spec = java.security.spec.ECGenParameterSpec("secp256r1")
-        val kpg = java.security.KeyPairGenerator.getInstance(EC_ALGORITHM).apply { initialize(spec) }
-        val params = (kpg.generateKeyPair().public as ECPublicKey).params
-        val p = java.math.BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16)
-        val b = params.curve.b
-
-        val x3 = x.modPow(java.math.BigInteger.valueOf(3), p)
-        val ax = x.multiply(java.math.BigInteger.valueOf(3)).mod(p)
-        val ySquared = x3.subtract(ax).add(b).mod(p)
-        
-        val exp = p.add(java.math.BigInteger.ONE).divide(java.math.BigInteger.valueOf(4))
-        var y = ySquared.modPow(exp, p)
-        
-        val isYEven = !y.testBit(0)
-        val isPrefixEven = (prefix == 0x02)
-        if (isYEven != isPrefixEven) {
-            y = p.subtract(y)
-        }
-
-        val uncompressed = ByteArray(65)
-        uncompressed[0] = 0x04
-        val yBytes = y.toByteArray()
-        val yOffset = Math.max(0, yBytes.size - 32)
-        val yDestOffset = 33 + Math.max(0, 32 - yBytes.size)
-        val yLength = Math.min(32, yBytes.size)
-        System.arraycopy(xBytes, 0, uncompressed, 1, 32)
-        System.arraycopy(yBytes, yOffset, uncompressed, yDestOffset, yLength)
-        
-        return uncompressed
+        return CryptoUtils.decompressECKey(compressed)
     }
 
-    // Generate 16-byte advertPlaintext seed bound to routingId and timestamp
+    /**
+     * Construct 16-byte seed bound to routing ID, domain ID, and current timestamp.
+     *
+     * Embed timestamp and routing parameters into the seed payload to guarantee uniqueness and freshness
+     * for ephemeral BLE advertising payloads.
+     */
     fun generateSeed(routingId: ByteArray, domainId: Int): ByteArray {
         val seed = ByteArray(16)
         seed[0] = 0x00
@@ -72,7 +46,12 @@ object CryptoHelper {
         return seed
     }
 
-    // Generate standard 20-byte EID for caBLE v2 given derived 64-byte eidKey and 16-byte seed
+    /**
+     * Generate 20-byte EID for caBLE v2 using derived 64-byte EID key and 16-byte advertisement seed.
+     *
+     * Encrypt advertisement seed using AES-CBC (32-byte key) and append 4-byte HMAC-SHA256 tag (32-byte key)
+     * to fulfill caBLE v2 BLE advertisement payload specification.
+     */
     fun generateEid(eidKey: ByteArray, seed: ByteArray): ByteArray {
         val aesKey = eidKey.copyOfRange(0, 32)
         val hmacKey = eidKey.copyOfRange(32, 64)
@@ -91,70 +70,36 @@ object CryptoHelper {
         return result
     }
 
-    // Overload for backwards compatibility
+    /**
+     * Overload to generate 20-byte EID directly from QR secret, routing ID, and domain ID.
+     */
     fun generateEid(qrSecret: ByteArray, routingId: ByteArray, domainId: Int): ByteArray {
         val eidKey = endif(ikm = qrSecret, salt = ByteArray(0), info = byteArrayOf(1, 0, 0, 0), length = 64)
         val seed = generateSeed(routingId, domainId)
         return generateEid(eidKey, seed)
     }
 
+    /**
+     * Perform ECDH shared secret computation by delegating to [CryptoUtils].
+     */
     fun recd(privy: ECPrivateKey, peerUncompressedOrDer: ByteArray): ByteArray {
-        val pub = try {
-            if (peerUncompressedOrDer.size == 65 && peerUncompressedOrDer[0] == 0x04.toByte()) {
-                val x = peerUncompressedOrDer.sliceArray(1..32)
-                val y = peerUncompressedOrDer.sliceArray(33..64)
-                val kg = java.security.KeyPairGenerator.getInstance(EC_ALGORITHM).apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }
-                val tmp = (kg.generateKeyPair().public as ECPublicKey).params
-                val spec = ECPublicKeySpec(ECPoint(java.math.BigInteger(1, x), java.math.BigInteger(1, y)), tmp)
-                KeyFactory.getInstance(EC_ALGORITHM).generatePublic(spec) as ECPublicKey
-            } else {
-                KeyFactory.getInstance(EC_ALGORITHM).generatePublic(X509EncodedKeySpec(peerUncompressedOrDer)) as ECPublicKey
-            }
-        } catch (_: Throwable) {
-            val derPrefix = byteArrayOf(
-                0x30, 89, 0x30, 19, 0x06, 7, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x02, 0x01, 0x06, 8, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x03, 0x01, 0x07, 0x03, 66, 0
-            )
-            val full = derPrefix + peerUncompressedOrDer
-            KeyFactory.getInstance(EC_ALGORITHM).generatePublic(X509EncodedKeySpec(full)) as ECPublicKey
-        }
-
-        val ka = javax.crypto.KeyAgreement.getInstance("ECDH")
-        ka.init(privy)
-        ka.doPhase(pub, true)
-        return ka.generateSecret()
+        return CryptoUtils.computeECDHSecret(privy, peerUncompressedOrDer)
     }
 
+    /**
+     * Perform HKDF key derivation by delegating to [CryptoUtils].
+     */
     fun endif(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
-        val prk = endifExtract(salt, ikm)
-        return endifExpand(prk, info, length)
-    }
-
-    private fun endifExtract(salt: ByteArray, ikm: ByteArray): ByteArray {
-        val s = if (salt.isEmpty()) ByteArray(32) else salt
-        val mac = Mac.getInstance(HKDF_ALGORITHM).apply { init(SecretKeySpec(s, HKDF_ALGORITHM)) }
-        return mac.doFinal(ikm)
-    }
-
-    private fun endifExpand(prk: ByteArray, info: ByteArray, length: Int): ByteArray {
-        val glen = 32
-        val rounds = ceil(length / glen.toDouble()).toInt()
-        val mac = Mac.getInstance(HKDF_ALGORITHM).apply { init(SecretKeySpec(prk, HKDF_ALGORITHM)) }
-
-        val out = ByteArray(length)
-        var prev = ByteArray(0)
-        repeat(rounds) { i ->
-            mac.reset()
-            if (prev.isNotEmpty()) mac.update(prev)
-            mac.update(info)
-            mac.update((i + 1).toByte())
-            prev = mac.doFinal()
-            val copy = minOf(glen, length - i * glen)
-            System.arraycopy(prev, 0, out, i * glen, copy)
-        }
-        return out
+        return CryptoUtils.hkdf(ikm, salt, info, length)
     }
 }
 
+/**
+ * Manage Noise Protocol handshake state transitions, running digests, and key mixings.
+ *
+ * Implement Noise KNpsk0 and NKpsk0 handshake state machines to negotiate symmetric session keys
+ * over unauthenticated web sockets prior to CTAP message exchange.
+ */
 class NoiseHandshakeState(mode: Int) {
     private val protocolName = when (mode) {
         2 -> "Noise_NKpsk0_P256_AESGCM_SHA256"
@@ -166,19 +111,25 @@ class NoiseHandshakeState(mode: Int) {
     private var chainingKey: ByteArray = handshakeHash.clone()
     private var cipherKey: ByteArray? = null
 
+    /**
+     * Update running handshake digest with new message or key data.
+     */
     fun mixHash(data: ByteArray) {
-        handshakeHash = MessageDigest.getInstance("SHA-256").run {
-            update(handshakeHash)
-            digest(data)
-        }
+        handshakeHash = CryptoUtils.sha256(handshakeHash + data)
     }
 
+    /**
+     * Mix input key material into chaining key and derive new cipher key.
+     */
     fun mixKey(inputKeyMaterial: ByteArray) {
         val (ck, k) = endif(chainingKey, inputKeyMaterial, 2)
         chainingKey = ck
         cipherKey = k
     }
 
+    /**
+     * Mix input key material into chaining key, mix temporary hash into running digest, and derive cipher key.
+     */
     fun mixKeyAndHash(inputKeyMaterial: ByteArray) {
         val (ck, tempHash, k) = endif(chainingKey, inputKeyMaterial, 3)
         chainingKey = ck
@@ -186,6 +137,9 @@ class NoiseHandshakeState(mode: Int) {
         cipherKey = k
     }
 
+    /**
+     * Encrypt handshake payload with current cipher key and bind running handshake hash as AEAD data.
+     */
     fun encryptAndHash(plaintext: ByteArray): ByteArray {
         val key = cipherKey ?: ByteArray(32)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
@@ -197,11 +151,9 @@ class NoiseHandshakeState(mode: Int) {
         }
     }
 
-    fun splitSessionKeys(): Pair<ByteArray, ByteArray> {
-        val (k1, k2) = endif(chainingKey, ByteArray(0), 2)
-        return k1 to k2
-    }
-
+    /**
+     * Decrypt incoming handshake payload using current cipher key and authenticate AEAD data.
+     */
     fun decryptAndHash(ct: ByteArray): ByteArray {
         val key = cipherKey ?: ByteArray(32)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
@@ -213,8 +165,19 @@ class NoiseHandshakeState(mode: Int) {
         return pt
     }
 
+    /**
+     * Split chaining key into reader and writer keys upon completing Noise handshake.
+     */
+    fun splitSessionKeys(): Pair<ByteArray, ByteArray> {
+        val (k1, k2) = endif(chainingKey, ByteArray(0), 2)
+        return k1 to k2
+    }
+
+    /**
+     * Expand chaining key into multiple output keys using HKDF-Extract and HKDF-Expand rounds.
+     */
     private fun endif(chainingKey: ByteArray, inputKeyMaterial: ByteArray, outputs: Int): List<ByteArray> {
-        val prk = endifExtract(chainingKey, inputKeyMaterial)
+        val prk = CryptoUtils.hkdfExtract(chainingKey, inputKeyMaterial)
         val mac = Mac.getInstance(HKDF_ALGORITHM).apply {
             init(SecretKeySpec(prk, HKDF_ALGORITHM))
         }
@@ -229,18 +192,20 @@ class NoiseHandshakeState(mode: Int) {
         }
         return result
     }
-
-    private fun endifExtract(salt: ByteArray, ikm: ByteArray): ByteArray {
-        val s = if (salt.isEmpty()) ByteArray(32) else salt
-        val mac = Mac.getInstance(HKDF_ALGORITHM).apply { init(SecretKeySpec(s, HKDF_ALGORITHM)) }
-        return mac.doFinal(ikm)
-    }
 }
 
+/**
+ * Handle symmetric AEAD encryption and decryption of transport frames post-handshake.
+ *
+ * Maintain incremental nonces for read/write directions to enforce replay protection over WebSocket frames.
+ */
 class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
     private var rCtr = 0
     private var wCtr = 0
 
+    /**
+     * Encrypt transport frame bytes with incrementing write nonce and 32-byte block padding.
+     */
     fun encrypt(plain: ByteArray): ByteArray? = try {
         val padded = pad32(plain)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
@@ -250,6 +215,9 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
         null
     }
 
+    /**
+     * Decrypt transport frame bytes with incrementing read nonce and unpad 32-byte blocks.
+     */
     fun decrypt(cipher: ByteArray): ByteArray? = try {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.DECRYPT_MODE, SecretKeySpec(rKey, AEMK_ALGORITHM), GCMParameterSpec(128, nonce(rCtr++)))
