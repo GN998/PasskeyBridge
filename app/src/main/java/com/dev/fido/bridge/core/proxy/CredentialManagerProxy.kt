@@ -8,11 +8,10 @@ import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.PublicKeyCredential
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
+import com.dev.fido.bridge.core.ctap.mapper.AssertionResponseResolver
 import com.dev.fido.bridge.core.ctap.mapper.CtapMapper
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
-import com.dev.fido.bridge.core.security.CryptoUtils
-import org.json.JSONObject
 
 /**
  * Delegate FIDO CTAP2 requests to Android CredentialManager system services.
@@ -38,9 +37,8 @@ class CredentialManagerProxy(private val context: Context) {
     /**
      * Execute WebAuthn assertion retrieval via Android CredentialManager.
      *
-     * Dynamically resolve the actual credential ID selected during user authentication from the
-     * response JSON payload before falling back to the request allowList. This prevents credential ID
-     * mismatches in multi-account environments where the user chooses a non-first credential.
+     * Delegate credential ID extraction to [AssertionResponseResolver] to bind the signature
+     * directly to the credential chosen by the user in the system UI sheet.
      */
     private suspend fun handleGetAssertion(req: Ctap2Request.GetAssertion): Ctap2Response {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
@@ -60,18 +58,8 @@ class CredentialManagerProxy(private val context: Context) {
             val pubKeyCredential = result.credential as PublicKeyCredential
             val responseJson = pubKeyCredential.authenticationResponseJson
 
-            // Dynamically resolve actual chosen credential ID from response JSON before falling back to allowList
-            val credId = try {
-                val responseObj = JSONObject(responseJson)
-                val idStr = responseObj.optString("id", "").ifEmpty { responseObj.optString("rawId", "") }
-                if (idStr.isNotEmpty()) {
-                    CryptoUtils.decodeBase64Url(idStr)
-                } else {
-                    req.allowList?.firstOrNull()?.id ?: ByteArray(0)
-                }
-            } catch (_: Exception) {
-                req.allowList?.firstOrNull()?.id ?: ByteArray(0)
-            }
+            // Resolve the actual selected credential ID from response JSON to prevent public key mismatches
+            val credId = AssertionResponseResolver.resolveCredentialId(responseJson, req.allowList)
 
             return CtapMapper.parseAssertionResponseJson(responseJson, credId)
         } else {

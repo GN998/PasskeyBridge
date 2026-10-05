@@ -11,10 +11,8 @@ import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECPoint
 import java.security.spec.ECPublicKeySpec
 import java.security.spec.X509EncodedKeySpec
-import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
 import javax.crypto.Mac
-import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.ceil
 
@@ -28,7 +26,6 @@ object CryptoUtils {
 
     private const val HKDF_ALGORITHM = "HmacSHA256"
     private const val EC_ALGORITHM = "EC"
-    private const val AES_ALGORITHM = "AES"
 
     /**
      * Encode binary data into URL-safe Base64 representation without padding.
