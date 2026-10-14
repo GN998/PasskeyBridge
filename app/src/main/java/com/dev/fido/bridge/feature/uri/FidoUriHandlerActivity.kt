@@ -92,7 +92,8 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
         
         if (uriString != null) {
-            tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
+            // Omit raw URI string on UI to prevent leaking sensitive QR secrets and curve points
+            tv.text = "Parsing..."
             val qrData = HybridQrParser.parse(uriString)
             
             if (qrData != null) {
