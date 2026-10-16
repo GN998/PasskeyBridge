@@ -2,28 +2,29 @@ package com.dev.fido.bridge.core.proxy
 
 import android.content.Context
 import android.util.Log
+import androidx.credentials.CreatePublicKeyCredentialRequest
+import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
-import androidx.credentials.CreatePublicKeyCredentialRequest
-import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.PublicKeyCredential
 import androidx.credentials.exceptions.CreateCredentialCancellationException
 import androidx.credentials.exceptions.CreateCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
-import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
-import androidx.credentials.exceptions.publickeycredential.GetPublicKeyCredentialDomException
 import androidx.credentials.exceptions.domerrors.InvalidStateError
 import androidx.credentials.exceptions.domerrors.NotAllowedError
 import androidx.credentials.exceptions.domerrors.NotSupportedError
+import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
+import androidx.credentials.exceptions.publickeycredential.GetPublicKeyCredentialDomException
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
 import com.dev.fido.bridge.core.ctap.mapper.CtapMapper
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.security.CryptoUtils
+import com.dev.fido.bridge.core.security.toHex
 import org.json.JSONObject
 
 class CredentialManagerProxy(private val context: Context) {
@@ -40,7 +41,7 @@ class CredentialManagerProxy(private val context: Context) {
     private suspend fun handleGetAssertion(req: Ctap2Request.GetAssertion): Ctap2Response {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
-        val clientDataHashHex = req.clientDataHash.joinToString("") { "%02X".format(it) }
+        val clientDataHashHex = req.clientDataHash.toHex(uppercase = true)
 
         Log.d("CredentialManagerProxy", "GetAssertion Request JSON: $jsonRequest")
         Log.d("CredentialManagerProxy", "GetAssertion PC clientDataHash: $clientDataHashHex, origin: $trustedOrigin")
@@ -59,39 +60,21 @@ class CredentialManagerProxy(private val context: Context) {
 
         return try {
             val result = credentialManager.getCredential(context, getReq)
+            val pubKeyCredential = result.credential as? PublicKeyCredential
+                ?: return Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
 
-            if (result.credential is PublicKeyCredential) {
-                val pubKeyCredential = result.credential as PublicKeyCredential
-                val responseJson = pubKeyCredential.authenticationResponseJson
-                Log.d("CredentialManagerProxy", "Raw authenticationResponseJson: $responseJson")
+            val responseJson = pubKeyCredential.authenticationResponseJson
+            Log.d("CredentialManagerProxy", "Raw authenticationResponseJson: $responseJson")
 
-                // Log decoded clientDataJSON from provider response to verify whether the provider
-                // signed the raw clientDataHash or constructed a new clientDataJSON.
-                try {
-                    val respObj = JSONObject(responseJson).getJSONObject("response")
-                    val clientDataB64 = respObj.optString("clientDataJSON", "")
-                    if (clientDataB64.isNotEmpty()) {
-                        val decodedClientData = String(CryptoUtils.decodeBase64Url(clientDataB64), Charsets.UTF_8)
-                        Log.d("CredentialManagerProxy", "Decoded provider clientDataJSON: $decodedClientData")
-                    }
-                } catch (e: Exception) {
-                    Log.w("CredentialManagerProxy", "Could not decode provider clientDataJSON", e)
-                }
+            // Extract the actual selected credential ID from authenticationResponseJson first
+            // so multi-credential allowLists do not return the wrong descriptor ID.
+            val credId = runCatching {
+                val responseObj = JSONObject(responseJson)
+                val idStr = responseObj.optString("rawId", "").ifEmpty { responseObj.optString("id", "") }
+                if (idStr.isNotEmpty()) CryptoUtils.decodeBase64Url(idStr) else null
+            }.getOrNull() ?: req.allowList?.firstOrNull()?.id ?: ByteArray(0)
 
-                // Extract the actual selected credential ID from authenticationResponseJson first
-                // so multi-credential allowLists do not return the wrong descriptor ID.
-                val credId = try {
-                    val responseObj = JSONObject(responseJson)
-                    val idStr = responseObj.optString("rawId", "").ifEmpty { responseObj.optString("id", "") }
-                    if (idStr.isNotEmpty()) CryptoUtils.decodeBase64Url(idStr) else null
-                } catch (e: Exception) {
-                    null
-                } ?: req.allowList?.firstOrNull()?.id ?: ByteArray(0)
-
-                CtapMapper.parseAssertionResponseJson(responseJson, credId)
-            } else {
-                Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
-            }
+            CtapMapper.parseAssertionResponseJson(responseJson, credId)
         } catch (e: GetCredentialException) {
             Log.e("CredentialManagerProxy", "GetCredential failed: ${e.type} - ${e.message}", e)
             Ctap2Response.ErrorResponse(mapGetExceptionToCtapStatus(e))
@@ -117,14 +100,12 @@ class CredentialManagerProxy(private val context: Context) {
 
         return try {
             val result = credentialManager.createCredential(context, createReq)
+            val pubKeyResponse = result as? CreatePublicKeyCredentialResponse
+                ?: return Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
 
-            if (result is CreatePublicKeyCredentialResponse) {
-                val responseJson = result.registrationResponseJson
-                Log.d("CredentialManagerProxy", "Raw registrationResponseJson: $responseJson")
-                CtapMapper.parseMakeCredentialResponseJson(responseJson)
-            } else {
-                Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
-            }
+            val responseJson = pubKeyResponse.registrationResponseJson
+            Log.d("CredentialManagerProxy", "Raw registrationResponseJson: $responseJson")
+            CtapMapper.parseMakeCredentialResponseJson(responseJson)
         } catch (e: CreateCredentialException) {
             Log.e("CredentialManagerProxy", "CreateCredential failed: ${e.type} - ${e.message}", e)
             Ctap2Response.ErrorResponse(mapCreateExceptionToCtapStatus(e))

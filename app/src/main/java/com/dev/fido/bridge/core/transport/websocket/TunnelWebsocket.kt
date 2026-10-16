@@ -2,7 +2,13 @@ package com.dev.fido.bridge.core.transport.websocket
 
 import android.util.Log
 import com.dev.fido.bridge.core.security.DomainDerivation
-import okhttp3.*
+import com.dev.fido.bridge.core.security.hexToByteArray
+import com.dev.fido.bridge.core.security.toHex
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
 
@@ -13,22 +19,25 @@ class TunnelWebsocket(
     private val onMessageReceived: (ByteArray) -> Unit,
     private val onStatusUpdate: ((String) -> Unit)? = null
 ) {
-    // Enable 15-second ping interval to prevent idle tunnel drops while user interacts with biometric/PIN prompts
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .pingInterval(15, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    companion object {
+        // Share a single OkHttpClient instance across sessions to reuse connection pools and thread dispatchers.
+        // Enable 15-second ping interval to prevent idle tunnel drops while user interacts with biometric/PIN prompts.
+        private val sharedClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .pingInterval(15, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 
     private var webSocket: WebSocket? = null
 
     fun connect() {
         val domain = DomainDerivation.deriveDomainForTunnelId(domainId)
-        val tunnelIdHex = ephemeralTunnelId.joinToString("") { "%02x".format(it) }
-        
+        val tunnelIdHex = ephemeralTunnelId.toHex()
+
         val url = "wss://$domain/cable/new/$tunnelIdHex"
 
         val request = Request.Builder()
@@ -36,7 +45,7 @@ class TunnelWebsocket(
             .header("Sec-WebSocket-Protocol", "fido.cable")
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        webSocket = sharedClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 // Verify the negotiated WebSocket subprotocol matches "fido.cable" per CTAP 2.3 §11.5.1.1.1
                 val negotiatedSubprotocol = response.header("Sec-WebSocket-Protocol")
@@ -47,23 +56,15 @@ class TunnelWebsocket(
                 val msg = "WebSocket Tunnel Connected to $domain!"
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
-                
+
                 // Extract 3-byte Routing ID from HTTP response header "X-Cable-Routing-Id"
-                val routingIdHeader = response.header("X-Cable-Routing-Id") ?: response.header("x-cable-routing-id")
+                val routingIdHeader = response.header("X-Cable-Routing-Id")
                 val routingId = try {
-                    if (!routingIdHeader.isNullOrEmpty()) {
-                        val routingIdHex = routingIdHeader.trim()
-                        if (routingIdHex.length == 6) {
-                            val bytes = ByteArray(3)
-                            for (i in 0 until 3) {
-                                bytes[i] = routingIdHex.substring(i * 2, i * 2 + 2).toInt(16).toByte()
-                            }
-                            bytes
-                        } else {
-                            routingIdHex.toByteArray(Charsets.ISO_8859_1).copyOf(3)
-                        }
-                    } else {
-                        ByteArray(3) // Fallback empty routing ID
+                    val trimmed = routingIdHeader?.trim()
+                    when {
+                        trimmed.isNullOrEmpty() -> ByteArray(3)
+                        trimmed.length == 6 -> trimmed.hexToByteArray()
+                        else -> trimmed.toByteArray(Charsets.ISO_8859_1).copyOf(3)
                     }
                 } catch (e: Exception) {
                     Log.w("TunnelWebsocket", "Failed to parse X-Cable-Routing-Id header: $routingIdHeader", e)
