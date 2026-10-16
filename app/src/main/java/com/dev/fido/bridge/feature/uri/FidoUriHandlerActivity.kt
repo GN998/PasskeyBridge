@@ -37,10 +37,10 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     }
 
     private fun checkAndRequestPermissions() {
+        // Request only BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT on Android 14+ without legacy location permissions
         val permissions = listOf(
             Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.ACCESS_FINE_LOCATION
+            Manifest.permission.BLUETOOTH_CONNECT
         )
 
         val missingPermissions = permissions.filter {
@@ -58,8 +58,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            initializeController()
-            handleIntent(intent)
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                initializeController()
+                handleIntent(intent)
+            } else {
+                tv.text = "Bluetooth permissions are required for FIDO proximity verification."
+            }
         }
     }
 
@@ -83,16 +87,25 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        setIntent(intent)
         if (::sessionController.isInitialized) {
             handleIntent(intent)
         }
     }
 
     private fun handleIntent(intent: Intent?) {
+        // Verify Bluetooth is enabled before starting a caBLE session so users are not stuck waiting on silent BLE failure
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothAdapter = bluetoothManager.adapter
+        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
+            tv.text = "Bluetooth is turned off.\nPlease enable Bluetooth and scan the FIDO QR code again."
+            return
+        }
+
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
         
         if (uriString != null) {
-            tv.text = "Parsing..."
+            tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
             val qrData = HybridQrParser.parse(uriString)
             
             if (qrData != null) {

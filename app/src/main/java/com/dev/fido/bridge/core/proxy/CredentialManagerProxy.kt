@@ -41,17 +41,31 @@ class CredentialManagerProxy(private val context: Context) {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
 
-        val option = GetPublicKeyCredentialOption(
-            requestJson = jsonRequest,
-            clientDataHash = req.clientDataHash
-        )
-        val getReq = GetCredentialRequest.Builder()
-            .addCredentialOption(option)
-            .setOrigin(trustedOrigin)
-            .build()
-
         return try {
-            val result = credentialManager.getCredential(context, getReq)
+            val result = try {
+                // Attempt privileged request with explicit origin and clientDataHash first
+                val privilegedOption = GetPublicKeyCredentialOption(
+                    requestJson = jsonRequest,
+                    clientDataHash = req.clientDataHash
+                )
+                val privilegedReq = GetCredentialRequest.Builder()
+                    .addCredentialOption(privilegedOption)
+                    .setOrigin(trustedOrigin)
+                    .build()
+                credentialManager.getCredential(context, privilegedReq)
+            } catch (e: Exception) {
+                if (isPrivilegedPermissionError(e)) {
+                    Log.w("CredentialManagerProxy", "Privileged setOrigin rejected, falling back to standard request", e)
+                    val fallbackOption = GetPublicKeyCredentialOption(requestJson = jsonRequest)
+                    val fallbackReq = GetCredentialRequest.Builder()
+                        .addCredentialOption(fallbackOption)
+                        .build()
+                    credentialManager.getCredential(context, fallbackReq)
+                } else {
+                    throw e
+                }
+            }
+
             if (result.credential is PublicKeyCredential) {
                 val pubKeyCredential = result.credential as PublicKeyCredential
                 val responseJson = pubKeyCredential.authenticationResponseJson
@@ -73,6 +87,9 @@ class CredentialManagerProxy(private val context: Context) {
         } catch (e: GetCredentialException) {
             Log.e("CredentialManagerProxy", "GetCredential failed: ${e.type}", e)
             Ctap2Response.ErrorResponse(mapGetExceptionToCtapStatus(e))
+        } catch (e: SecurityException) {
+            Log.e("CredentialManagerProxy", "SecurityException during GetCredential", e)
+            Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
         }
     }
 
@@ -80,15 +97,29 @@ class CredentialManagerProxy(private val context: Context) {
         val jsonRequest = CtapMapper.toWebAuthnCreateCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
 
-        val createReq = CreatePublicKeyCredentialRequest(
-            requestJson = jsonRequest,
-            clientDataHash = req.clientDataHash,
-            origin = trustedOrigin,
-            preferImmediatelyAvailableCredentials = false
-        )
-
         return try {
-            val result = credentialManager.createCredential(context, createReq)
+            val result = try {
+                // Attempt privileged request with explicit origin and clientDataHash first
+                val privilegedReq = CreatePublicKeyCredentialRequest(
+                    requestJson = jsonRequest,
+                    clientDataHash = req.clientDataHash,
+                    origin = trustedOrigin,
+                    preferImmediatelyAvailableCredentials = false
+                )
+                credentialManager.createCredential(context, privilegedReq)
+            } catch (e: Exception) {
+                if (isPrivilegedPermissionError(e)) {
+                    Log.w("CredentialManagerProxy", "Privileged setOrigin rejected, falling back to standard request", e)
+                    val fallbackReq = CreatePublicKeyCredentialRequest(
+                        requestJson = jsonRequest,
+                        preferImmediatelyAvailableCredentials = false
+                    )
+                    credentialManager.createCredential(context, fallbackReq)
+                } else {
+                    throw e
+                }
+            }
+
             if (result is CreatePublicKeyCredentialResponse) {
                 val responseJson = result.registrationResponseJson
                 CtapMapper.parseMakeCredentialResponseJson(responseJson)
@@ -98,7 +129,19 @@ class CredentialManagerProxy(private val context: Context) {
         } catch (e: CreateCredentialException) {
             Log.e("CredentialManagerProxy", "CreateCredential failed: ${e.type}", e)
             Ctap2Response.ErrorResponse(mapCreateExceptionToCtapStatus(e))
+        } catch (e: SecurityException) {
+            Log.e("CredentialManagerProxy", "SecurityException during CreateCredential", e)
+            Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
         }
+    }
+
+    // Detect whether the exception is caused by missing CREDENTIAL_MANAGER_SET_ORIGIN or allowlist privileges
+    private fun isPrivilegedPermissionError(e: Exception): Boolean {
+        if (e is SecurityException) return true
+        val msg = e.message.orEmpty()
+        return msg.contains("CREDENTIAL_MANAGER_SET_ORIGIN", ignoreCase = true) ||
+                msg.contains("origin", ignoreCase = true) ||
+                msg.contains("privileged", ignoreCase = true)
     }
 
     // Map Android CredentialManager exceptions to accurate CTAP2 status codes instead of hardcoding 0x31 (PIN_INVALID)

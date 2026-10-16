@@ -100,12 +100,19 @@ class TransportManager(
                                 onStatusUpdate?.invoke(logMsg)
                                 
                                 val ctapReq = decrypted.copyOfRange(1, decrypted.size)
+                                val commandByte = if (ctapReq.isNotEmpty()) ctapReq[0] else 0x00.toByte()
+
                                 // Dispatch CTAP request asynchronously so WebSocket reader thread remains responsive
                                 transportScope.launch {
                                     try {
                                         val response = onRequestReceived(ctapReq)
                                         val framedResponse = byteArrayOf(0x01) + response
                                         tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+
+                                        // Notify UI when MakeCredential (0x01) or GetAssertion (0x02) transaction completes
+                                        if (commandByte == 0x01.toByte() || commandByte == 0x02.toByte()) {
+                                            onStatusUpdate?.invoke("CTAP Transaction Complete.")
+                                        }
                                     } catch (e: Exception) {
                                         Log.e("TransportManager", "Error processing CTAP request", e)
                                         onStatusUpdate?.invoke("CTAP Error: ${e.message}")
@@ -115,6 +122,7 @@ class TransportManager(
                             0x00 -> {
                                 // Close session cleanly upon receiving client shutdown message (typeShutdown = 0) per CTAP 2.3 §11.5
                                 Log.d("TransportManager", "Received Shutdown message (0x00), closing tunnel.")
+                                onStatusUpdate?.invoke("Peer closed connection. Session complete.")
                                 stopSession()
                             }
                             else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
