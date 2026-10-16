@@ -2,11 +2,11 @@ package com.dev.fido.bridge.feature.session
 
 import android.content.Context
 import android.util.Log
-import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
 import com.dev.fido.bridge.core.ctap.codec.CtapCodecException
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.proxy.CredentialManagerProxy
+import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.TransportManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +25,11 @@ class BridgeSessionController(
     var onStatusUpdate: ((String) -> Unit)? = null
 
     // Default value provided for domainId to ensure backwards compatibility
-    fun onQrCodeScanned(peerPublicKey: ByteArray, psk: ByteArray, domainId: Int = BuildConfig.TUNNEL_ID) {
+    fun onQrCodeScanned(
+        peerPublicKey: ByteArray,
+        psk: ByteArray,
+        domainId: Int = TunnelConfigManager.getEffectiveTunnelId()
+    ) {
         transportManager?.onStatusUpdate = { status ->
             scope.launch { onStatusUpdate?.invoke(status) }
         }

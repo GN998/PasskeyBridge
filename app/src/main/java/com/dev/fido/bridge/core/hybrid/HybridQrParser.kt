@@ -1,7 +1,7 @@
 package com.dev.fido.bridge.core.hybrid
 
-import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.security.TunnelConfigManager
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -28,8 +28,8 @@ object HybridQrParser {
             val secret = cborMap[1L] as? ByteArray ?: return null
 
             // In CTAP 2.3 §11.5.1.1, QR CBOR Key 2 is numAssignedDomains, NOT the tunnel server ID.
-            // The tunnel server ID is chosen by the authenticator (BuildConfig.TUNNEL_ID) and advertised via BLE EID.
-            val tunnelServerId = BuildConfig.TUNNEL_ID
+            // Resolve tunnel server ID dynamically to support user runtime overrides alongside build-time defaults.
+            val tunnelServerId = TunnelConfigManager.getEffectiveTunnelId()
 
             return HybridQrData(
                 version = 2,

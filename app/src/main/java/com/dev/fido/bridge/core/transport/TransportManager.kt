@@ -1,9 +1,9 @@
 package com.dev.fido.bridge.core.transport
 
 import android.util.Log
-import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
@@ -27,7 +27,7 @@ class TransportManager(
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
-        domainId: Int = BuildConfig.TUNNEL_ID,
+        domainId: Int = TunnelConfigManager.getEffectiveTunnelId(),
         onRequestReceived: suspend (ByteArray) -> ByteArray
     ) {
         // Terminate any lingering WebSocket connection, BLE advertisement, or coroutine job

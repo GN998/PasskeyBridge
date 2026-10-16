@@ -53,7 +53,8 @@ class TunnelWebsocket(
                     Log.w("TunnelWebsocket", "Unexpected WebSocket subprotocol: $negotiatedSubprotocol")
                 }
 
-                val msg = "WebSocket Tunnel Connected to $domain!"
+                // Omit derived tunnel hostname from UI and logs to prevent exposing custom relay infrastructure
+                val msg = "WebSocket Tunnel Connected!"
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
 
@@ -82,8 +83,10 @@ class TunnelWebsocket(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                val msg = "WebSocket Error: ${t.message}"
-                Log.e("TunnelWebsocket", msg, t)
+                // Redact derived hostname from network exception messages (e.g., DNS resolution failures)
+                val sanitizedError = t.message?.replace(domain, "***", ignoreCase = true) ?: "Connection failed"
+                val msg = "WebSocket Error: $sanitizedError"
+                Log.e("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
             }
         })
