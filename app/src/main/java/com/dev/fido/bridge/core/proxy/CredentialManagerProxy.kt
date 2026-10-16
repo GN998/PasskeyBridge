@@ -8,24 +8,16 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.PublicKeyCredential
-import androidx.credentials.exceptions.CreateCredentialCancellationException
-import androidx.credentials.exceptions.CreateCredentialException
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
 import androidx.credentials.exceptions.domerrors.InvalidStateError
-import androidx.credentials.exceptions.domerrors.NotAllowedError
 import androidx.credentials.exceptions.domerrors.NotSupportedError
 import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCredentialDomException
-import androidx.credentials.exceptions.publickeycredential.GetPublicKeyCredentialDomException
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
 import com.dev.fido.bridge.core.ctap.mapper.CtapMapper
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
-import com.dev.fido.bridge.core.security.CryptoUtils
 import com.dev.fido.bridge.core.security.toHex
-import org.json.JSONObject
 
 class CredentialManagerProxy(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
@@ -58,29 +50,14 @@ class CredentialManagerProxy(private val context: Context) {
             .setOrigin(trustedOrigin)
             .build()
 
-        return try {
+        return executePrivilegedRequest("GetCredential") {
             val result = credentialManager.getCredential(context, getReq)
             val pubKeyCredential = result.credential as? PublicKeyCredential
-                ?: return Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+                ?: return@executePrivilegedRequest Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
 
             val responseJson = pubKeyCredential.authenticationResponseJson
             Log.d("CredentialManagerProxy", "Raw authenticationResponseJson: $responseJson")
-
-            // Extract the actual selected credential ID from authenticationResponseJson first
-            // so multi-credential allowLists do not return the wrong descriptor ID.
-            val credId = runCatching {
-                val responseObj = JSONObject(responseJson)
-                val idStr = responseObj.optString("rawId", "").ifEmpty { responseObj.optString("id", "") }
-                if (idStr.isNotEmpty()) CryptoUtils.decodeBase64Url(idStr) else null
-            }.getOrNull() ?: req.allowList?.firstOrNull()?.id ?: ByteArray(0)
-
-            CtapMapper.parseAssertionResponseJson(responseJson, credId)
-        } catch (e: GetCredentialException) {
-            Log.e("CredentialManagerProxy", "GetCredential failed: ${e.type} - ${e.message}", e)
-            Ctap2Response.ErrorResponse(mapGetExceptionToCtapStatus(e))
-        } catch (e: SecurityException) {
-            Log.e("CredentialManagerProxy", "SecurityException during GetCredential: check provider allowlist or CREDENTIAL_MANAGER_SET_ORIGIN", e)
-            Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+            CtapMapper.parseAssertionResponseJson(responseJson, req.allowList)
         }
     }
 
@@ -98,40 +75,39 @@ class CredentialManagerProxy(private val context: Context) {
             preferImmediatelyAvailableCredentials = false
         )
 
-        return try {
+        return executePrivilegedRequest("CreateCredential") {
             val result = credentialManager.createCredential(context, createReq)
             val pubKeyResponse = result as? CreatePublicKeyCredentialResponse
-                ?: return Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+                ?: return@executePrivilegedRequest Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
 
             val responseJson = pubKeyResponse.registrationResponseJson
             Log.d("CredentialManagerProxy", "Raw registrationResponseJson: $responseJson")
             CtapMapper.parseMakeCredentialResponseJson(responseJson)
-        } catch (e: CreateCredentialException) {
-            Log.e("CredentialManagerProxy", "CreateCredential failed: ${e.type} - ${e.message}", e)
-            Ctap2Response.ErrorResponse(mapCreateExceptionToCtapStatus(e))
-        } catch (e: SecurityException) {
-            Log.e("CredentialManagerProxy", "SecurityException during CreateCredential: check provider allowlist or CREDENTIAL_MANAGER_SET_ORIGIN", e)
-            Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
         }
     }
 
-    // Map Android CredentialManager exceptions to accurate CTAP2 status codes instead of hardcoding 0x31 (PIN_INVALID)
-    private fun mapGetExceptionToCtapStatus(e: GetCredentialException): Byte = when (e) {
-        is GetCredentialCancellationException -> CtapStatus.ERR_OPERATION_DENIED
+    /**
+     * Execute privileged CredentialManager calls and translate DOM or security exceptions into standard CTAP2 error responses.
+     */
+    private suspend inline fun executePrivilegedRequest(
+        operationName: String,
+        block: () -> Ctap2Response
+    ): Ctap2Response = try {
+        block()
+    } catch (e: SecurityException) {
+        Log.e("CredentialManagerProxy", "SecurityException during $operationName: check provider allowlist or CREDENTIAL_MANAGER_SET_ORIGIN", e)
+        Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+    } catch (e: Exception) {
+        Log.e("CredentialManagerProxy", "$operationName failed: ${e.message}", e)
+        Ctap2Response.ErrorResponse(mapExceptionToCtapStatus(e))
+    }
+
+    // Map Android CredentialManager exceptions to accurate CTAP2 status codes
+    private fun mapExceptionToCtapStatus(e: Exception): Byte = when (e) {
         is NoCredentialException -> CtapStatus.ERR_NO_CREDENTIALS
-        is GetPublicKeyCredentialDomException -> when (e.domError) {
-            is NotAllowedError -> CtapStatus.ERR_OPERATION_DENIED
-            else -> CtapStatus.ERR_OPERATION_DENIED
-        }
-        else -> CtapStatus.ERR_OPERATION_DENIED
-    }
-
-    private fun mapCreateExceptionToCtapStatus(e: CreateCredentialException): Byte = when (e) {
-        is CreateCredentialCancellationException -> CtapStatus.ERR_OPERATION_DENIED
         is CreatePublicKeyCredentialDomException -> when (e.domError) {
             is InvalidStateError -> CtapStatus.ERR_CREDENTIAL_EXCLUDED
             is NotSupportedError -> CtapStatus.ERR_UNSUPPORTED_ALGORITHM
-            is NotAllowedError -> CtapStatus.ERR_OPERATION_DENIED
             else -> CtapStatus.ERR_OPERATION_DENIED
         }
         else -> CtapStatus.ERR_OPERATION_DENIED

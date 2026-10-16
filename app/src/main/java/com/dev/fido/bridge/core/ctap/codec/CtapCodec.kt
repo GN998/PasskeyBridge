@@ -57,7 +57,7 @@ object CtapCodec {
     /**
      * Extract and cast mandatory CBOR map fields while distinguishing missing keys (0x14) from type mismatches (0x11) per CTAP 2.3 §6.
      */
-    private inline fun <reified T> Map<*, *>.requireField(key: Any, name: String): T {
+    internal inline fun <reified T> Map<*, *>.requireField(key: Any, name: String): T {
         val value = this[key]
             ?: throw CtapCodecException(CtapStatus.ERR_MISSING_PARAMETER, "Missing required parameter: $name")
         return value as? T
@@ -86,7 +86,8 @@ object CtapCodec {
             val paramMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
             val type = paramMap.requireField<String>("type", "pubKeyCredParams.type")
-            val alg = paramMap.requireField<Any>("alg", "pubKeyCredParams.alg")
+            // Enforce CBOR integer type for COSEAlgorithmIdentifier per CTAP 2.3 §6.1
+            val alg = paramMap.requireField<Long>("alg", "pubKeyCredParams.alg")
 
             mapOf(
                 "type" to type,

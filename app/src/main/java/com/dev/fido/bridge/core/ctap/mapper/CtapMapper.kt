@@ -1,10 +1,13 @@
 package com.dev.fido.bridge.core.ctap.mapper
 
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.ctap.codec.CtapCodec.requireField
+import com.dev.fido.bridge.core.ctap.codec.CtapCodecException
 import com.dev.fido.bridge.core.ctap.codec.toWebAuthnUv
 import com.dev.fido.bridge.core.ctap.model.CredentialDescriptor
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
+import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.security.CryptoUtils
 import org.json.JSONArray
 import org.json.JSONObject
@@ -71,8 +74,20 @@ object CtapMapper {
         }
     }
 
-    fun parseAssertionResponseJson(jsonResponseStr: String, credentialId: ByteArray): Ctap2Response.GetAssertionResponse {
-        val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
+    fun parseAssertionResponseJson(
+        jsonResponseStr: String,
+        allowList: List<CredentialDescriptor>? = null
+    ): Ctap2Response.GetAssertionResponse {
+        val rootObj = JSONObject(jsonResponseStr)
+        // Extract selected credential ID from authenticationResponseJson first so multi-credential allowLists return the exact match
+        val idStr = rootObj.optString("rawId", "").ifEmpty { rootObj.optString("id", "") }
+        val credentialId = if (idStr.isNotEmpty()) {
+            CryptoUtils.decodeBase64Url(idStr)
+        } else {
+            allowList?.firstOrNull()?.id ?: ByteArray(0)
+        }
+
+        val responseObj = rootObj.getJSONObject("response")
         return Ctap2Response.GetAssertionResponse(
             credentialId = credentialId,
             authenticatorData = CryptoUtils.decodeBase64Url(responseObj.getString("authenticatorData")),
@@ -85,13 +100,14 @@ object CtapMapper {
         val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
         val attestationObjectBytes = CryptoUtils.decodeBase64Url(responseObj.getString("attestationObject"))
 
-        // Decode the CBOR attestationObject into fmt, authData, and attStmt
-        val map = CtapCodec.SimpleCbor.read(attestationObjectBytes) as Map<*, *>
+        // Decode and validate CBOR attestationObject fields without unsafe casts
+        val map = CtapCodec.SimpleCbor.read(attestationObjectBytes) as? Map<*, *>
+            ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "attestationObject must be a CBOR map")
 
         return Ctap2Response.MakeCredentialResponse(
-            fmt = map["fmt"] as String,
-            authData = map["authData"] as ByteArray,
-            attStmt = map["attStmt"] as Map<*, *>
+            fmt = map.requireField("fmt", "attestationObject.fmt"),
+            authData = map.requireField("authData", "attestationObject.authData"),
+            attStmt = map.requireField("attStmt", "attestationObject.attStmt")
         )
     }
 }
