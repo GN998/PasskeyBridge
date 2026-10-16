@@ -29,6 +29,10 @@ class TransportManager(
         domainId: Int = BuildConfig.TUNNEL_ID,
         onRequestReceived: suspend (ByteArray) -> ByteArray
     ) {
+        // Terminate any lingering WebSocket connection, BLE advertisement, or coroutine job
+        // from a prior scan before starting a new hybrid transport session.
+        stopSession()
+
         val uncompressedPeerKey = CryptoHelper.decompressECKey(peerPublicKey)
         noiseSession.setPeerPublicKey(uncompressedPeerKey)
 
@@ -145,6 +149,7 @@ class TransportManager(
         transportScope.coroutineContext.cancelChildren()
         bleAdvertiser.stopAdvertising()
         tunnelWebsocket?.close()
+        tunnelWebsocket = null
     }
 
     private fun buildPostHandshakeMessage(): ByteArray {

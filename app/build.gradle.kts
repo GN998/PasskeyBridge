@@ -26,7 +26,8 @@ android {
     namespace = "com.dev.fido.bridge"
     compileSdk = 34
 
-    // Add signingConfigs for fixed certificate
+    // Enforce deterministic APK signing certificate so external credential providers
+    // (e.g., Authnkey, Bitwarden) can reliably verify the app's SHA-256 fingerprint allowlist.
     signingConfigs {
         create("fixedConfig") {
             val keystoreFile = rootProject.file("my-release-key.jks")
@@ -36,6 +37,10 @@ android {
                 storePassword = System.getenv("STORE_PASSWORD") ?: localProperties.getProperty("STORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS") ?: localProperties.getProperty("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD") ?: localProperties.getProperty("KEY_PASSWORD")
+            } else if (System.getenv("CI") == "true" || System.getenv("GITHUB_ACTIONS") == "true") {
+                // Fail fast in CI environments to prevent producing unsigned or mismatched APKs
+                // that silently break CredentialManager privileged allowlist checks.
+                throw GradleException("Build failed: my-release-key.jks is missing in CI environment!")
             }
         }
     }

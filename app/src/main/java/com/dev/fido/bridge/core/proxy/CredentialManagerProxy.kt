@@ -41,26 +41,30 @@ class CredentialManagerProxy(private val context: Context) {
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
 
+        // Preserve PC's raw clientDataHash across all tiers because signing an Android-generated
+        // clientDataJSON invalidates the cryptographic signature on the remote Relying Party.
+        val optionWithHash = GetPublicKeyCredentialOption(
+            requestJson = jsonRequest,
+            clientDataHash = req.clientDataHash
+        )
+
         return try {
             val result = try {
-                // Attempt privileged request with explicit origin and clientDataHash first
-                val privilegedOption = GetPublicKeyCredentialOption(
-                    requestJson = jsonRequest,
-                    clientDataHash = req.clientDataHash
-                )
+                // Tier 1: Attempt full privileged request with both OS-level origin and clientDataHash
                 val privilegedReq = GetCredentialRequest.Builder()
-                    .addCredentialOption(privilegedOption)
+                    .addCredentialOption(optionWithHash)
                     .setOrigin(trustedOrigin)
                     .build()
                 credentialManager.getCredential(context, privilegedReq)
             } catch (e: Exception) {
                 if (isPrivilegedPermissionError(e)) {
-                    Log.w("CredentialManagerProxy", "Privileged setOrigin rejected, falling back to standard request", e)
-                    val fallbackOption = GetPublicKeyCredentialOption(requestJson = jsonRequest)
-                    val fallbackReq = GetCredentialRequest.Builder()
-                        .addCredentialOption(fallbackOption)
+                    Log.w("CredentialManagerProxy", "OS rejected top-level setOrigin, retrying with clientDataHash for allowlisted provider", e)
+                    // Tier 2: Omit OS-restricted setOrigin on the builder while retaining clientDataHash
+                    // in the option so allowlisted providers (e.g., Authnkey/Bitwarden) still sign the exact PC hash.
+                    val hashOnlyReq = GetCredentialRequest.Builder()
+                        .addCredentialOption(optionWithHash)
                         .build()
-                    credentialManager.getCredential(context, fallbackReq)
+                    credentialManager.getCredential(context, hashOnlyReq)
                 } else {
                     throw e
                 }
@@ -69,6 +73,7 @@ class CredentialManagerProxy(private val context: Context) {
             if (result.credential is PublicKeyCredential) {
                 val pubKeyCredential = result.credential as PublicKeyCredential
                 val responseJson = pubKeyCredential.authenticationResponseJson
+                Log.d("CredentialManagerProxy", "Raw authenticationResponseJson: $responseJson")
                 
                 // Extract the actual selected credential ID from authenticationResponseJson first
                 // so multi-credential allowLists do not return the wrong descriptor ID
@@ -88,7 +93,7 @@ class CredentialManagerProxy(private val context: Context) {
             Log.e("CredentialManagerProxy", "GetCredential failed: ${e.type}", e)
             Ctap2Response.ErrorResponse(mapGetExceptionToCtapStatus(e))
         } catch (e: SecurityException) {
-            Log.e("CredentialManagerProxy", "SecurityException during GetCredential", e)
+            Log.e("CredentialManagerProxy", "SecurityException during GetCredential: provider rejected clientDataHash privilege", e)
             Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
         }
     }
@@ -99,7 +104,7 @@ class CredentialManagerProxy(private val context: Context) {
 
         return try {
             val result = try {
-                // Attempt privileged request with explicit origin and clientDataHash first
+                // Tier 1: Attempt full privileged request with explicit origin and clientDataHash
                 val privilegedReq = CreatePublicKeyCredentialRequest(
                     requestJson = jsonRequest,
                     clientDataHash = req.clientDataHash,
@@ -109,12 +114,14 @@ class CredentialManagerProxy(private val context: Context) {
                 credentialManager.createCredential(context, privilegedReq)
             } catch (e: Exception) {
                 if (isPrivilegedPermissionError(e)) {
-                    Log.w("CredentialManagerProxy", "Privileged setOrigin rejected, falling back to standard request", e)
-                    val fallbackReq = CreatePublicKeyCredentialRequest(
+                    Log.w("CredentialManagerProxy", "OS rejected setOrigin, retrying MakeCredential with clientDataHash only", e)
+                    // Tier 2: Retain clientDataHash without origin so allowlisted providers can still attest to PC's clientDataHash
+                    val hashOnlyReq = CreatePublicKeyCredentialRequest(
                         requestJson = jsonRequest,
+                        clientDataHash = req.clientDataHash,
                         preferImmediatelyAvailableCredentials = false
                     )
-                    credentialManager.createCredential(context, fallbackReq)
+                    credentialManager.createCredential(context, hashOnlyReq)
                 } else {
                     throw e
                 }
@@ -122,6 +129,7 @@ class CredentialManagerProxy(private val context: Context) {
 
             if (result is CreatePublicKeyCredentialResponse) {
                 val responseJson = result.registrationResponseJson
+                Log.d("CredentialManagerProxy", "Raw registrationResponseJson: $responseJson")
                 CtapMapper.parseMakeCredentialResponseJson(responseJson)
             } else {
                 Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
@@ -130,7 +138,7 @@ class CredentialManagerProxy(private val context: Context) {
             Log.e("CredentialManagerProxy", "CreateCredential failed: ${e.type}", e)
             Ctap2Response.ErrorResponse(mapCreateExceptionToCtapStatus(e))
         } catch (e: SecurityException) {
-            Log.e("CredentialManagerProxy", "SecurityException during CreateCredential", e)
+            Log.e("CredentialManagerProxy", "SecurityException during CreateCredential: provider rejected clientDataHash privilege", e)
             Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
         }
     }

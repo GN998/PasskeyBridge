@@ -22,6 +22,11 @@ class NoiseSession {
     // Step 1: Initialize the noise state machine with derived PSK
     fun initializeHandshake(psk: ByteArray) {
         val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
+        // Reset handshake flag and session crypter so subsequent QR scans on a singleTop Activity
+        // process the new ClientHello instead of treating it as post-handshake ciphertext.
+        isHandshakeComplete = false
+        crypter = null
+
         val nh = NoiseHandshakeState(mode = 3) // Noise KNpsk0
         noiseState = nh
         
