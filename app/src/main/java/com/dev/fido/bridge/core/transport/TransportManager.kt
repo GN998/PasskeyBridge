@@ -3,6 +3,7 @@ package com.dev.fido.bridge.core.transport
 import android.util.Log
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
@@ -100,12 +101,11 @@ class TransportManager(
                         val frameType = decrypted[0].toInt() and 0xFF
                         when (frameType) {
                             0x01 -> {
-                                val logMsg = "Received CTAP Request!"
-                                Log.d("TransportManager", logMsg)
-                                onStatusUpdate?.invoke(logMsg)
-
                                 val ctapReq = decrypted.copyOfRange(1, decrypted.size)
                                 val commandByte = if (ctapReq.isNotEmpty()) ctapReq[0] else 0x00.toByte()
+                                val logMsg = "Received CTAP Request (0x${"%02X".format(commandByte)})!"
+                                Log.d("TransportManager", logMsg)
+                                onStatusUpdate?.invoke(logMsg)
 
                                 // Dispatch CTAP request asynchronously so WebSocket reader thread remains responsive
                                 transportScope.launch {
@@ -116,7 +116,12 @@ class TransportManager(
 
                                         // Notify UI when MakeCredential (0x01) or GetAssertion (0x02) transaction completes
                                         if (commandByte == 0x01.toByte() || commandByte == 0x02.toByte()) {
-                                            onStatusUpdate?.invoke("CTAP Transaction Complete.")
+                                            val statusByte = if (response.isNotEmpty()) response[0] else CtapStatus.ERR_OPERATION_DENIED
+                                            if (statusByte == CtapStatus.SUCCESS) {
+                                                onStatusUpdate?.invoke("CTAP Transaction Complete.")
+                                            } else {
+                                                onStatusUpdate?.invoke("CTAP Rejected (Status: 0x${"%02X".format(statusByte)}).")
+                                            }
                                         }
                                     } catch (e: Exception) {
                                         Log.e("TransportManager", "Error processing CTAP request", e)
@@ -128,7 +133,9 @@ class TransportManager(
                                 // Close session cleanly upon receiving client shutdown message (typeShutdown = 0) per CTAP 2.3 §11.5
                                 Log.d("TransportManager", "Received Shutdown message (0x00), closing tunnel.")
                                 onStatusUpdate?.invoke("Peer closed connection. Session complete.")
-                                stopSession()
+                                bleAdvertiser.stopAdvertising()
+                                tunnelWebsocket?.close()
+                                tunnelWebsocket = null
                             }
                             else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
                         }
