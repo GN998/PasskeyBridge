@@ -35,114 +35,108 @@ object CtapCodec {
         val commandByte = rawPayload[0]
         val cborBytes = if (rawPayload.size > 1) rawPayload.copyOfRange(1, rawPayload.size) else ByteArray(0)
 
-        // Validate command code explicitly and throw CtapCodecException with ERR_INVALID_COMMAND (0x01)
-        return when (commandByte) {
-            0x04.toByte() -> Ctap2Request.GetInfo
-            0x01.toByte() -> decodeMakeCredential(cborBytes)
-            0x02.toByte() -> decodeGetAssertion(cborBytes)
-            else -> throw CtapCodecException(
-                CtapStatus.ERR_INVALID_COMMAND,
-                "Unsupported command byte: 0x${"%02X".format(commandByte)}"
-            )
+        // Centralize CBOR decoding error handling to avoid duplicating catch blocks across command parsers
+        return try {
+            when (commandByte) {
+                0x04.toByte() -> Ctap2Request.GetInfo
+                0x01.toByte() -> decodeMakeCredential(cborBytes)
+                0x02.toByte() -> decodeGetAssertion(cborBytes)
+                else -> throw CtapCodecException(
+                    CtapStatus.ERR_INVALID_COMMAND,
+                    "Unsupported command byte: 0x${"%02X".format(commandByte)}"
+                )
+            }
+        } catch (e: CtapCodecException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("CtapCodec", "CTAP request decode error (command: 0x${"%02X".format(commandByte)})", e)
+            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid CTAP CBOR payload", e)
         }
+    }
+
+    /**
+     * Extract and cast mandatory CBOR map fields while distinguishing missing keys (0x14) from type mismatches (0x11) per CTAP 2.3 §6.
+     */
+    private inline fun <reified T> Map<*, *>.requireField(key: Any, name: String): T {
+        val value = this[key]
+            ?: throw CtapCodecException(CtapStatus.ERR_MISSING_PARAMETER, "Missing required parameter: $name")
+        return value as? T
+            ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "Unexpected CBOR type for parameter: $name")
     }
 
     private fun decodeMakeCredential(cborBytes: ByteArray): Ctap2Request.MakeCredential {
-        return try {
-            val map = SimpleCbor.read(cborBytes) as? Map<*, *>
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "MakeCredential request must be a CBOR map")
+        val map = SimpleCbor.read(cborBytes) as? Map<*, *>
+            ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "MakeCredential request must be a CBOR map")
 
-            val clientDataHash = map[1L] as? ByteArray
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing clientDataHash (key 1)")
+        val clientDataHash = map.requireField<ByteArray>(1L, "clientDataHash")
 
-            val rp = map[2L] as? Map<*, *>
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing rp entity (key 2)")
-            val rpId = rp["id"] as? String
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing rp.id")
-            val rpName = rp["name"] as? String ?: ""
+        val rp = map.requireField<Map<*, *>>(2L, "rp")
+        val rpId = rp.requireField<String>("id", "rp.id")
+        val rpName = rp["name"] as? String ?: ""
 
-            val user = map[3L] as? Map<*, *>
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing user entity (key 3)")
-            val userId = user["id"] as? ByteArray
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing user.id")
-            val userName = user["name"] as? String ?: ""
-            val userDisplayName = user["displayName"] as? String ?: ""
+        val user = map.requireField<Map<*, *>>(3L, "user")
+        val userId = user.requireField<ByteArray>("id", "user.id")
+        val userName = user["name"] as? String ?: ""
+        val userDisplayName = user["displayName"] as? String ?: ""
 
-            val pubKeyCredParamsRaw = map[4L] as? List<*> ?: emptyList<Any>()
+        val pubKeyCredParamsRaw = map.requireField<List<*>>(4L, "pubKeyCredParams")
 
-            // Validate required fields 'type' and 'alg' without non-null assertions
-            val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
-                val paramMap = item as? Map<*, *>
-                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
-                val type = paramMap["type"] as? String
-                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing required member 'type' in pubKeyCredParams")
-                val alg = paramMap["alg"]
-                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing required member 'alg' in pubKeyCredParams")
+        // Validate required fields 'type' and 'alg' without non-null assertions
+        val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
+            val paramMap = item as? Map<*, *>
+                ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
+            val type = paramMap.requireField<String>("type", "pubKeyCredParams.type")
+            val alg = paramMap.requireField<Any>("alg", "pubKeyCredParams.alg")
 
-                mapOf(
-                    "type" to type,
-                    "alg" to alg
-                )
-            }
-
-            // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
-            val excludeList = parseDescriptorList(map[5L], "excludeList")
-
-            // Extract options (key 7) such as resident key (rk) and user verification (uv) requirements
-            val optionsRaw = map[7L] as? Map<*, *>
-            val options = optionsRaw?.entries?.mapNotNull { (k, v) ->
-                val keyStr = k as? String
-                val valBool = v as? Boolean
-                if (keyStr != null && valBool != null) keyStr to valBool else null
-            }?.toMap()
-
-            Ctap2Request.MakeCredential(
-                clientDataHash = clientDataHash,
-                rpId = rpId,
-                rpName = rpName,
-                userId = userId,
-                userName = userName,
-                userDisplayName = userDisplayName,
-                pubKeyCredParams = pubKeyCredParams,
-                excludeList = excludeList,
-                options = options
+            mapOf(
+                "type" to type,
+                "alg" to alg
             )
-        } catch (e: CtapCodecException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e("CtapCodec", "MakeCredential decode error", e)
-            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid MakeCredential CBOR payload", e)
         }
+
+        // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
+        val excludeList = parseDescriptorList(map[5L], "excludeList")
+
+        // Extract options (key 7) such as resident key (rk) and user verification (uv) requirements
+        val optionsRaw = map[7L] as? Map<*, *>
+        val options = optionsRaw?.entries?.mapNotNull { (k, v) ->
+            val keyStr = k as? String
+            val valBool = v as? Boolean
+            if (keyStr != null && valBool != null) keyStr to valBool else null
+        }?.toMap()
+
+        return Ctap2Request.MakeCredential(
+            clientDataHash = clientDataHash,
+            rpId = rpId,
+            rpName = rpName,
+            userId = userId,
+            userName = userName,
+            userDisplayName = userDisplayName,
+            pubKeyCredParams = pubKeyCredParams,
+            excludeList = excludeList,
+            options = options
+        )
     }
 
     private fun decodeGetAssertion(cborBytes: ByteArray): Ctap2Request.GetAssertion {
-        return try {
-            val map = SimpleCbor.read(cborBytes) as? Map<*, *>
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "GetAssertion request must be a CBOR map")
+        val map = SimpleCbor.read(cborBytes) as? Map<*, *>
+            ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "GetAssertion request must be a CBOR map")
 
-            val rpId = map[1L] as? String
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing rpId (key 1)")
-            val clientDataHash = map[2L] as? ByteArray
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing clientDataHash (key 2)")
+        val rpId = map.requireField<String>(1L, "rpId")
+        val clientDataHash = map.requireField<ByteArray>(2L, "clientDataHash")
 
-            val allowList = parseDescriptorList(map[3L], "allowList")
+        val allowList = parseDescriptorList(map[3L], "allowList")
 
-            // Map CTAP2 options (key 5) uv flag to WebAuthn userVerification requirement
-            val optionsRaw = map[5L] as? Map<*, *>
-            val uvFlag = optionsRaw?.get("uv") as? Boolean
+        // Map CTAP2 options (key 5) uv flag to WebAuthn userVerification requirement
+        val optionsRaw = map[5L] as? Map<*, *>
+        val uvFlag = optionsRaw?.get("uv") as? Boolean
 
-            Ctap2Request.GetAssertion(
-                rpId = rpId,
-                clientDataHash = clientDataHash,
-                allowList = allowList,
-                userVerification = uvFlag.toWebAuthnUv()
-            )
-        } catch (e: CtapCodecException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e("CtapCodec", "GetAssertion decode error", e)
-            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid GetAssertion CBOR payload", e)
-        }
+        return Ctap2Request.GetAssertion(
+            rpId = rpId,
+            clientDataHash = clientDataHash,
+            allowList = allowList,
+            userVerification = uvFlag.toWebAuthnUv()
+        )
     }
 
     /**
@@ -154,8 +148,7 @@ object CtapCodec {
             val descMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName element must be a map")
             val type = descMap["type"] as? String ?: "public-key"
-            val id = descMap["id"] as? ByteArray
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in $fieldName descriptor")
+            val id = descMap.requireField<ByteArray>("id", "$fieldName.id")
             CredentialDescriptor(type = type, id = id)
         }
     }

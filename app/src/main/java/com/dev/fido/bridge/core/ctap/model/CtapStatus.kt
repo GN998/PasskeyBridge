@@ -7,6 +7,7 @@ object CtapStatus {
     const val ERR_INVALID_PARAMETER: Byte = 0x02
     const val ERR_CBOR_UNEXPECTED_TYPE: Byte = 0x11
     const val ERR_INVALID_CBOR: Byte = 0x12
+    const val ERR_MISSING_PARAMETER: Byte = 0x14
     const val ERR_CREDENTIAL_EXCLUDED: Byte = 0x19
     const val ERR_UNSUPPORTED_ALGORITHM: Byte = 0x26
     const val ERR_OPERATION_DENIED: Byte = 0x27
