@@ -3,19 +3,24 @@ package com.dev.fido.bridge.core.transport.noise
 import android.util.Log
 
 class NoiseSession {
+    @Volatile
     var isHandshakeComplete = false
         private set
 
     private var noiseState: NoiseHandshakeState? = null
+    @Volatile
     private var crypter: NoiseCrypter? = null
+    @Volatile
     private var peerPublicKeyBytes: ByteArray? = null
 
     // Inject the PC's public key (scanned from QR)
+    @Synchronized
     fun setPeerPublicKey(keyBytes: ByteArray) {
         this.peerPublicKeyBytes = keyBytes
     }
 
     // Step 1: Initialize the noise state machine with derived PSK
+    @Synchronized
     fun initializeHandshake(psk: ByteArray) {
         val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
         // Reset handshake flag and session crypter so subsequent QR scans on a singleTop Activity
@@ -33,6 +38,7 @@ class NoiseSession {
     }
 
     // Step 2: Process the incoming ClientHello and generate ServerHello
+    @Synchronized
     fun processClientHelloAndGenerateServerHello(clientHello: ByteArray): ByteArray {
         val nh = noiseState ?: throw IllegalStateException("Handshake not initialized")
         val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
@@ -46,7 +52,11 @@ class NoiseSession {
 
         nh.mixHash(pcEphemeralPubKey)
         nh.mixKey(pcEphemeralPubKey)
-        nh.decryptAndHash(clientHelloPayload)
+        val plaintext = nh.decryptAndHash(clientHelloPayload)
+        // Reject non-empty ClientHello plaintext per CTAP 2.3 §11.5.1.2 handshake verification rules
+        if (plaintext.isNotEmpty()) {
+            throw IllegalArgumentException("ClientHello decrypted payload must be empty per CTAP 2.3 §11.5.1.2, got ${plaintext.size} bytes")
+        }
 
         val (ephPub, ephPriv) = CryptoHelper.generateEcKeyPair()
         val phoneEphemeralPubKey = CryptoHelper.uncompressECKey(ephPub)
@@ -71,12 +81,14 @@ class NoiseSession {
         return serverHello
     }
 
+    @Synchronized
     fun encrypt(plaintext: ByteArray): ByteArray {
         check(isHandshakeComplete) { "Handshake not complete" }
         // Require initialized session crypter instead of falling back to unencrypted plaintext
         return checkNotNull(crypter) { "Session crypter not initialized" }.encrypt(plaintext)
     }
 
+    @Synchronized
     fun decrypt(ciphertext: ByteArray): ByteArray {
         check(isHandshakeComplete) { "Handshake not complete" }
         return checkNotNull(crypter) { "Session crypter not initialized" }.decrypt(ciphertext)

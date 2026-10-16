@@ -9,6 +9,7 @@ import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
 import com.dev.fido.bridge.core.transport.websocket.TunnelWebsocket
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -116,16 +117,20 @@ class TransportManager(
                                         val framedResponse = byteArrayOf(0x01) + response
                                         tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
 
-                                        // Notify UI when MakeCredential (0x01) or GetAssertion (0x02) transaction completes
+                                        // Notify UI when MakeCredential (0x01) or GetAssertion (0x02) transaction completes.
+                                        // Only invoke onSessionTerminated upon SUCCESS; keep tunnel active on protocol error responses
+                                        // (e.g., pre-flight up=false ERR_NO_CREDENTIALS) so the client can send follow-up commands or 0x00 Shutdown per CTAP 2.3 §11.5.1.2.
                                         if (commandByte == 0x01.toByte() || commandByte == 0x02.toByte()) {
                                             val statusByte = if (response.isNotEmpty()) response[0] else CtapStatus.ERR_OPERATION_DENIED
                                             if (statusByte == CtapStatus.SUCCESS) {
                                                 onStatusUpdate?.invoke("CTAP Transaction Complete.")
+                                                onSessionTerminated?.invoke()
                                             } else {
                                                 onStatusUpdate?.invoke("CTAP Rejected (Status: 0x${"%02X".format(statusByte)}).")
                                             }
-                                            onSessionTerminated?.invoke()
                                         }
+                                    } catch (e: CancellationException) {
+                                        throw e
                                     } catch (e: Exception) {
                                         Log.e("TransportManager", "Error processing CTAP request", e)
                                         onStatusUpdate?.invoke("CTAP Error: ${e.message}")

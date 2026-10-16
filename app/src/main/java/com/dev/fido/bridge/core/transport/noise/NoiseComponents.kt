@@ -59,17 +59,21 @@ object CryptoHelper {
         encodeUncompressedPoint(pub.w.affineX, pub.w.affineY)
 
     /**
-     * Decompress 33-byte SEC1 compressed EC public key from QR payload into 65-byte uncompressed format.
+     * Decompress and validate 33-byte SEC1 compressed EC public key from QR payload into 65-byte uncompressed format per CTAP 2.3 §11.5.1.
      */
     fun decompressECKey(compressed: ByteArray): ByteArray {
         if (compressed.size == 65 && compressed[0] == 0x04.toByte()) return compressed
-        if (compressed.size != 33) return compressed
+        require(compressed.size == 33 && (compressed[0] == 0x02.toByte() || compressed[0] == 0x03.toByte())) {
+            "Peer public key must be a 33-byte SEC1 compressed P-256 point (0x02 or 0x03 prefix)"
+        }
 
-        val prefix = compressed[0].toInt()
+        val prefix = compressed[0].toInt() and 0xFF
         val xBytes = compressed.copyOfRange(1, 33)
         val x = BigInteger(1, xBytes)
 
         val p = BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16)
+        require(x > BigInteger.ZERO && x < p) { "P-256 X coordinate out of prime field range" }
+
         val b = secp256r1Params.curve.b
 
         val x3 = x.modPow(BigInteger.valueOf(3), p)
@@ -78,6 +82,11 @@ object CryptoHelper {
 
         val exp = p.add(BigInteger.ONE).divide(BigInteger.valueOf(4))
         var y = ySquared.modPow(exp, p)
+
+        // Verify that ySquared is a valid quadratic residue mod p to prevent invalid curve attacks
+        require(y.modPow(BigInteger.valueOf(2), p) == ySquared) {
+            "Decompressed point does not lie on the secp256r1 curve"
+        }
 
         val isYEven = !y.testBit(0)
         val isPrefixEven = (prefix == 0x02)
@@ -254,8 +263,9 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
 
     /**
      * Pad and encrypt transport payload with AES-256-GCM.
-     * Propagate cryptographic exceptions directly to prevent accidental plaintext fallback.
+     * Synchronize counter increment across OkHttp reader and Dispatchers.IO coroutine threads.
      */
+    @Synchronized
     fun encrypt(plain: ByteArray): ByteArray {
         val padded = pad32(plain)
         return CryptoHelper.aesGcm(Cipher.ENCRYPT_MODE, wKey, nonce(wCtr++), padded)
@@ -265,6 +275,7 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
      * Authenticate, decrypt, and unpad transport ciphertext with AES-256-GCM.
      * Throw GeneralSecurityException if GCM tag verification or 32-byte padding validation fails.
      */
+    @Synchronized
     fun decrypt(cipher: ByteArray): ByteArray {
         val padded = CryptoHelper.aesGcm(Cipher.DECRYPT_MODE, rKey, nonce(rCtr++), cipher)
         return unpad32(padded) ?: throw GeneralSecurityException("Invalid caBLE transport padding")

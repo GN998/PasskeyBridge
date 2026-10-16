@@ -28,6 +28,9 @@ fun Boolean?.toWebAuthnUv(): String = when (this) {
 
 object CtapCodec {
 
+    // Standard COSE algorithm identifiers supported by Android CredentialManager providers (ES256, EdDSA, RS256, ES384, ES512, PS256)
+    private val SUPPORTED_COSE_ALGORITHMS = setOf(-7L, -8L, -257L, -35L, -36L, -37L)
+
     fun decodeRequest(rawPayload: ByteArray): Ctap2Request {
         if (rawPayload.isEmpty()) {
             throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Empty CTAP payload")
@@ -38,7 +41,12 @@ object CtapCodec {
         // Centralize CBOR decoding error handling to avoid duplicating catch blocks across command parsers
         return try {
             when (commandByte) {
-                0x04.toByte() -> Ctap2Request.GetInfo
+                0x04.toByte() -> {
+                    if (cborBytes.isNotEmpty()) {
+                        throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "GetInfo command must not contain parameters")
+                    }
+                    Ctap2Request.GetInfo
+                }
                 0x01.toByte() -> decodeMakeCredential(cborBytes)
                 0x02.toByte() -> decodeGetAssertion(cborBytes)
                 else -> throw CtapCodecException(
@@ -76,16 +84,22 @@ object CtapCodec {
 
         val rp = map.requireField<Map<*, *>>(2L, "rp")
         val rpId = rp.requireField<String>("id", "rp.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
-        val rpName = rp["name"] as? String ?: ""
+        val rpName = rp["name"]?.let {
+            it as? String ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "Unexpected CBOR type for rp.name")
+        } ?: ""
 
         val user = map.requireField<Map<*, *>>(3L, "user")
         val userId = user.requireField<ByteArray>("id", "user.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
-        val userName = user["name"] as? String ?: ""
-        val userDisplayName = user["displayName"] as? String ?: ""
+        val userName = user["name"]?.let {
+            it as? String ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "Unexpected CBOR type for user.name")
+        } ?: ""
+        val userDisplayName = user["displayName"]?.let {
+            it as? String ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "Unexpected CBOR type for user.displayName")
+        } ?: ""
 
         val pubKeyCredParamsRaw = map.requireField<List<*>>(4L, "pubKeyCredParams")
 
-        // Validate every pubKeyCredParams element and ensure at least one public-key algorithm is present per CTAP 2.3 §6.1.2 Step 3
+        // Validate every pubKeyCredParams element and ensure at least one supported public-key algorithm is present per CTAP 2.3 §6.1.2 Step 3
         val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
             val paramMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
@@ -98,20 +112,15 @@ object CtapCodec {
                 "alg" to alg
             )
         }
-        if (pubKeyCredParams.none { it["type"] == "public-key" }) {
+        if (pubKeyCredParams.none { it["type"] == "public-key" && it["alg"] in SUPPORTED_COSE_ALGORITHMS }) {
             throw CtapCodecException(CtapStatus.ERR_UNSUPPORTED_ALGORITHM, "No supported public-key algorithm in pubKeyCredParams")
         }
 
         // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
         val excludeList = parseDescriptorList(map[5L], "excludeList")
 
-        // Extract options (key 7) such as resident key (rk) and user verification (uv) requirements
-        val optionsRaw = map[7L] as? Map<*, *>
-        val options = optionsRaw?.entries?.mapNotNull { (k, v) ->
-            val keyStr = k as? String
-            val valBool = v as? Boolean
-            if (keyStr != null && valBool != null) keyStr to valBool else null
-        }?.toMap()
+        // Extract and strictly type-check options (key 7) such as resident key (rk) and user verification (uv) requirements per CTAP 2.3 §6.1.2
+        val options = parseOptionsMap(map[7L], "MakeCredential.options")
 
         // Reject explicit "up" option in MakeCredential since FIDO_2_0 authenticators must return CTAP2_ERR_INVALID_OPTION if "up" is present, and "up"=false is invalid across all versions per CTAP 2.3 §6.1
         if (options != null && options.containsKey("up")) {
@@ -141,30 +150,51 @@ object CtapCodec {
         val allowList = parseDescriptorList(map[3L], "allowList")
 
         // Validate CTAP2 options (key 5) per CTAP 2.3 §6.2.2 Step 4
-        val optionsRaw = map[5L] as? Map<*, *>
-        if (optionsRaw != null && optionsRaw.containsKey("rk")) {
+        val options = parseOptionsMap(map[5L], "GetAssertion.options")
+        if (options != null && options.containsKey("rk")) {
             // Reject prohibited "rk" option in GetAssertion per CTAP 2.3 §6.2.2 Step 4.4
             throw CtapCodecException(CtapStatus.ERR_UNSUPPORTED_OPTION, "Option 'rk' is not supported in GetAssertion")
         }
-        val uvFlag = optionsRaw?.get("uv") as? Boolean
+        val uvFlag = options?.get("uv")
+        // Default "up" to true when absent per CTAP 2.3 §6.2.2 Step 4.5
+        val upFlag = options?.get("up") ?: true
 
         return Ctap2Request.GetAssertion(
             rpId = rpId,
             clientDataHash = clientDataHash,
             allowList = allowList,
-            userVerification = uvFlag.toWebAuthnUv()
+            userVerification = uvFlag.toWebAuthnUv(),
+            userPresence = upFlag
         )
+    }
+
+    /**
+     * Validate and extract the CTAP2 options map (Map<String, Boolean>), throwing ERR_CBOR_UNEXPECTED_TYPE on non-map or non-boolean values per CTAP 2.3 §6 & §8.
+     */
+    private fun parseOptionsMap(rawOptions: Any?, fieldName: String): Map<String, Boolean>? {
+        if (rawOptions == null) return null
+        val optionsMap = rawOptions as? Map<*, *>
+            ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName must be a CBOR map")
+        return optionsMap.entries.associate { (k, v) ->
+            val keyStr = k as? String
+                ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName key must be a text string")
+            val valBool = v as? Boolean
+                ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName['$keyStr'] value must be a boolean")
+            keyStr to valBool
+        }
     }
 
     /**
      * Parse CBOR array of PublicKeyCredentialDescriptor maps shared by MakeCredential and GetAssertion.
      */
     private fun parseDescriptorList(rawList: Any?, fieldName: String): List<CredentialDescriptor>? {
-        val list = rawList as? List<*> ?: return null
+        if (rawList == null) return null
+        val list = rawList as? List<*>
+            ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName must be a CBOR array")
         return list.map { item ->
             val descMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName element must be a map")
-            val type = descMap["type"] as? String ?: "public-key"
+            val type = descMap.requireField<String>("type", "$fieldName.type", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
             val id = descMap.requireField<ByteArray>("id", "$fieldName.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
             CredentialDescriptor(type = type, id = id)
         }
@@ -201,64 +231,109 @@ object CtapCodec {
     // A lightweight, dependency-free CBOR encoder/decoder optimized for FIDO structures
     object SimpleCbor {
         fun read(bytes: ByteArray): Any? {
+            if (bytes.isEmpty()) {
+                throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Empty CBOR byte stream")
+            }
             var pos = 0
             fun readByte(): Int {
-                if (pos >= bytes.size) throw IndexOutOfBoundsException()
+                if (pos >= bytes.size) throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Unexpected end of CBOR stream")
                 return bytes[pos++].toInt() and 0xFF
             }
             fun readBytes(len: Int): ByteArray {
-                if (len < 0 || pos + len > bytes.size) throw IndexOutOfBoundsException()
+                if (len < 0 || pos + len > bytes.size) {
+                    throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid CBOR byte string length: $len")
+                }
                 val res = bytes.copyOfRange(pos, pos + len)
                 pos += len
                 return res
             }
-            fun readItem(): Any? {
-                if (pos >= bytes.size) return null
+            fun readItem(depth: Int): Any? {
+                // Enforce CTAP 2.3 §8 maximum CBOR nesting depth of 4 levels for maps/arrays
+                if (depth > 4) {
+                    throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR nesting depth exceeds CTAP2 limit of 4")
+                }
                 val b = readByte()
                 val majorType = b shr 5
                 val info = b and 0x1F
 
-                // Decode 64-bit integers (info == 27) properly to prevent silent data corruption on large values
+                // Decode unsigned argument and enforce CTAP 2.3 §8 canonical minimal-length integer encoding
                 val value: Long = when {
                     info < 24 -> info.toLong()
-                    info == 24 -> readByte().toLong()
-                    info == 25 -> ((readByte() shl 8) or readByte()).toLong()
+                    info == 24 -> {
+                        val v = readByte().toLong()
+                        if (majorType != 7 && v < 24L) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Non-canonical 1-byte CBOR integer encoding")
+                        }
+                        v
+                    }
+                    info == 25 -> {
+                        val v = ((readByte() shl 8) or readByte()).toLong()
+                        if (majorType != 7 && v < 0x100L) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Non-canonical 2-byte CBOR integer encoding")
+                        }
+                        v
+                    }
                     info == 26 -> {
                         val i = (readByte() shl 24) or (readByte() shl 16) or (readByte() shl 8) or readByte()
-                        i.toLong() and 0xFFFFFFFFL
+                        val v = i.toLong() and 0xFFFFFFFFL
+                        if (majorType != 7 && v < 0x10000L) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Non-canonical 4-byte CBOR integer encoding")
+                        }
+                        v
                     }
                     info == 27 -> {
-                        (readByte().toLong() shl 56) or
-                        (readByte().toLong() shl 48) or
-                        (readByte().toLong() shl 40) or
-                        (readByte().toLong() shl 32) or
-                        (readByte().toLong() shl 24) or
-                        (readByte().toLong() shl 16) or
-                        (readByte().toLong() shl 8) or
-                        readByte().toLong()
+                        val v = (readByte().toLong() shl 56) or
+                            (readByte().toLong() shl 48) or
+                            (readByte().toLong() shl 40) or
+                            (readByte().toLong() shl 32) or
+                            (readByte().toLong() shl 24) or
+                            (readByte().toLong() shl 16) or
+                            (readByte().toLong() shl 8) or
+                            readByte().toLong()
+                        if (majorType != 7 && v in 0L until 0x100000000L) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Non-canonical 8-byte CBOR integer encoding")
+                        }
+                        v
                     }
-                    else -> return null
+                    // Reject indefinite-length items (info == 31) and reserved additional info (28..30) per CTAP 2.3 §8
+                    else -> throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Unsupported or indefinite-length CBOR info: $info")
                 }
 
                 return when (majorType) {
                     0 -> value
                     1 -> -1L - value
-                    2 -> readBytes(value.toInt())
-                    3 -> String(readBytes(value.toInt()), Charsets.UTF_8)
+                    2 -> {
+                        if (value < 0L || value > Int.MAX_VALUE) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR byte string length overflow")
+                        }
+                        readBytes(value.toInt())
+                    }
+                    3 -> {
+                        if (value < 0L || value > Int.MAX_VALUE) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR text string length overflow")
+                        }
+                        String(readBytes(value.toInt()), Charsets.UTF_8)
+                    }
                     4 -> {
+                        if (value < 0L || value > Int.MAX_VALUE) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR array length overflow")
+                        }
                         val list = mutableListOf<Any?>()
-                        for (i in 0 until value) list.add(readItem())
+                        for (i in 0 until value.toInt()) list.add(readItem(depth + 1))
                         list
                     }
                     5 -> {
+                        if (value < 0L || value > Int.MAX_VALUE) {
+                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR map length overflow")
+                        }
                         val map = linkedMapOf<Any?, Any?>()
-                        for (i in 0 until value) {
-                            val k = readItem()
+                        for (i in 0 until value.toInt()) {
+                            val k = readItem(depth + 1)
                             // Reject duplicate map keys per CTAP 2.3 §8 canonical CBOR decoding rules
                             if (map.containsKey(k)) {
                                 throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Duplicate CBOR map key: $k")
                             }
-                            map[k] = readItem()
+                            map[k] = readItem(depth + 1)
                         }
                         map
                     }
@@ -266,13 +341,19 @@ object CtapCodec {
                         when (info) {
                             20 -> false
                             21 -> true
-                            else -> null
+                            22 -> null
+                            else -> throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Unsupported CBOR simple value or float: $info")
                         }
                     }
-                    else -> null
+                    else -> throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Unsupported CBOR major type: $majorType")
                 }
             }
-            return readItem()
+            val root = readItem(0)
+            // Reject trailing unconsumed bytes to guarantee strict single-item CBOR framing per CTAP 2.3 §8
+            if (pos != bytes.size) {
+                throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Trailing bytes after root CBOR item: ${bytes.size - pos}")
+            }
+            return root
         }
 
         fun write(value: Any?): ByteArray {

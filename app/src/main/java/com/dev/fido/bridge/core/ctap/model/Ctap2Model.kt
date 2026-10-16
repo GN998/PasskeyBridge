@@ -8,7 +8,9 @@ sealed class Ctap2Request {
         val rpId: String,
         val clientDataHash: ByteArray,
         val allowList: List<CredentialDescriptor>? = null,
-        val userVerification: String? = null
+        val userVerification: String? = null,
+        // Default "up" to true per CTAP 2.3 §6.2.2 Step 4.5; false indicates a silent pre-flight probe
+        val userPresence: Boolean = true
     ) : Ctap2Request()
 
     data class MakeCredential(

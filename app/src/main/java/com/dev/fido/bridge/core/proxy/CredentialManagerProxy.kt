@@ -32,6 +32,13 @@ class CredentialManagerProxy(private val context: Context) {
     }
 
     private suspend fun handleGetAssertion(req: Ctap2Request.GetAssertion): Ctap2Response {
+        // Intercept silent pre-flight GetAssertion probes (options.up == false) per CTAP 2.3 §6.2.2
+        // to avoid triggering Android CredentialManager UI prompts when user presence is prohibited
+        if (!req.userPresence) {
+            Log.d("CredentialManagerProxy", "Silent pre-flight GetAssertion (up=false) intercepted; returning ERR_NO_CREDENTIALS")
+            return Ctap2Response.ErrorResponse(CtapStatus.ERR_NO_CREDENTIALS)
+        }
+
         val jsonRequest = CtapMapper.toWebAuthnGetCredentialJson(req)
         val trustedOrigin = "https://${req.rpId}"
         val clientDataHashHex = req.clientDataHash.toHex(uppercase = true)
