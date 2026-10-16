@@ -1,36 +1,41 @@
-<uses-permission android:name="android.permission.INTERNET" />
-<!-- Declare neverForLocation on Android 14+ as BLE proximity advertising does not derive physical location -->
-<uses-permission
-    android:name="android.permission.BLUETOOTH_ADVERTISE"
-    android:usesPermissionFlags="neverForLocation" />
-<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-<uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-<application
-    android:name=".BridgeApplication"
-    android:allowBackup="true"
-    android:icon="@mipmap/ic_launcher"
-    android:label="Passkey Bridge"
-    android:roundIcon="@mipmap/ic_launcher_round"
-    android:supportsRtl="true"
-    android:theme="@style/Theme.Material3.DayNight">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Declare neverForLocation on Android 14+ as BLE proximity advertising does not derive physical location -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADVERTISE"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
 
-    <!-- Set launchMode to singleTop so subsequent QR scans route to onNewIntent instead of spawning duplicate instances -->
-    <activity
-        android:name=".feature.uri.FidoUriHandlerActivity"
-        android:exported="true"
-        android:launchMode="singleTop">
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent-filter>
-        
-        <intent-filter>
-            <action android:name="android.intent.action.VIEW" />
-            <category android:name="android.intent.category.DEFAULT" />
-            <category android:name="android.intent.category.BROWSABLE" />
-            <data android:scheme="fido" />
-            <data android:scheme="FIDO" />
-        </intent-filter>
-    </activity>
-</application>
+    <application
+        android:name=".BridgeApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Passkey Bridge"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Material3.DayNight">
+
+        <!-- Set launchMode to singleTop so subsequent QR scans route to onNewIntent instead of spawning duplicate instances -->
+        <activity
+            android:name=".feature.uri.FidoUriHandlerActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fido" />
+                <data android:scheme="FIDO" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
