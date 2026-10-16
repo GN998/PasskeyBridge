@@ -18,6 +18,7 @@ import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.security.toHex
+import kotlinx.coroutines.CancellationException
 
 class CredentialManagerProxy(private val context: Context) {
     private val credentialManager = CredentialManager.create(context)
@@ -94,6 +95,9 @@ class CredentialManagerProxy(private val context: Context) {
         block: () -> Ctap2Response
     ): Ctap2Response = try {
         block()
+    } catch (e: CancellationException) {
+        // Propagate coroutine cancellation to preserve structured concurrency and prevent sending spurious error frames on closed sessions
+        throw e
     } catch (e: SecurityException) {
         Log.e("CredentialManagerProxy", "SecurityException during $operationName: check provider allowlist or CREDENTIAL_MANAGER_SET_ORIGIN", e)
         Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)

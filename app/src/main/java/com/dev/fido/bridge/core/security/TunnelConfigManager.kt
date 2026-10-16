@@ -30,6 +30,7 @@ object TunnelConfigManager {
      * Retrieve user-defined tunnel ID if present; return null when using default to prevent exposing BuildConfig.TUNNEL_ID in UI.
      */
     fun getCustomTunnelId(): Int? {
+        if (!::prefs.isInitialized) return null
         val value = prefs.getInt(KEY_CUSTOM_TUNNEL_ID, NO_CUSTOM_ID)
         return if (isValidTunnelId(value)) value else null
     }
@@ -37,7 +38,7 @@ object TunnelConfigManager {
     fun isValidTunnelId(id: Int): Boolean = id in MIN_TUNNEL_ID..MAX_TUNNEL_ID
 
     fun setCustomTunnelId(id: Int): Boolean {
-        if (!isValidTunnelId(id)) return false
+        if (!isValidTunnelId(id) || !::prefs.isInitialized) return false
         prefs.edit().putInt(KEY_CUSTOM_TUNNEL_ID, id).apply()
         return true
     }
@@ -46,6 +47,7 @@ object TunnelConfigManager {
      * Remove user override so subsequent sessions revert to the build-time injected tunnel ID.
      */
     fun clearCustomTunnelId() {
+        if (!::prefs.isInitialized) return
         prefs.edit().remove(KEY_CUSTOM_TUNNEL_ID).apply()
     }
 }
