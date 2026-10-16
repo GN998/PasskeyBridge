@@ -13,7 +13,6 @@ import java.security.spec.ECGenParameterSpec
 import java.security.spec.ECParameterSpec
 import java.security.spec.ECPoint
 import java.security.spec.ECPublicKeySpec
-import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
 import javax.crypto.Mac
@@ -121,28 +120,34 @@ object CryptoHelper {
         return result
     }
 
-    fun recd(privy: ECPrivateKey, peerUncompressedOrDer: ByteArray): ByteArray {
-        val pub = try {
-            if (peerUncompressedOrDer.size == 65 && peerUncompressedOrDer[0] == 0x04.toByte()) {
-                val x = peerUncompressedOrDer.sliceArray(1..32)
-                val y = peerUncompressedOrDer.sliceArray(33..64)
-                val spec = ECPublicKeySpec(ECPoint(BigInteger(1, x), BigInteger(1, y)), secp256r1Params)
-                KeyFactory.getInstance(EC_ALGORITHM).generatePublic(spec) as ECPublicKey
-            } else {
-                KeyFactory.getInstance(EC_ALGORITHM).generatePublic(X509EncodedKeySpec(peerUncompressedOrDer)) as ECPublicKey
-            }
-        } catch (_: Throwable) {
-            val derPrefix = byteArrayOf(
-                0x30, 89, 0x30, 19, 0x06, 7, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x02, 0x01, 0x06, 8, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d, 0x03, 0x01, 0x07, 0x03, 66, 0
-            )
-            val full = derPrefix + peerUncompressedOrDer
-            KeyFactory.getInstance(EC_ALGORITHM).generatePublic(X509EncodedKeySpec(full)) as ECPublicKey
+    /**
+     * Perform P-256 ECDH key agreement strictly against a 65-byte X9.62 uncompressed peer point per CTAP 2.3 Hybrid specification.
+     */
+    fun recd(privy: ECPrivateKey, peerUncompressed: ByteArray): ByteArray {
+        require(peerUncompressed.size == 65 && peerUncompressed[0] == 0x04.toByte()) {
+            "Peer public key must be a 65-byte uncompressed P-256 point"
         }
+        val x = BigInteger(1, peerUncompressed.copyOfRange(1, 33))
+        val y = BigInteger(1, peerUncompressed.copyOfRange(33, 65))
+        val spec = ECPublicKeySpec(ECPoint(x, y), secp256r1Params)
+        val pub = KeyFactory.getInstance(EC_ALGORITHM).generatePublic(spec) as ECPublicKey
 
-        val ka = KeyAgreement.getInstance("ECDH")
-        ka.init(privy)
-        ka.doPhase(pub, true)
-        return ka.generateSecret()
+        return KeyAgreement.getInstance("ECDH").run {
+            init(privy)
+            doPhase(pub, true)
+            generateSecret()
+        }
+    }
+
+    /**
+     * Execute AES-256-GCM encryption or decryption to unify cipher initialization across Noise handshake and transport phases.
+     */
+    fun aesGcm(mode: Int, key: ByteArray, nonce: ByteArray, input: ByteArray, aad: ByteArray? = null): ByteArray {
+        return Cipher.getInstance("AES/GCM/NoPadding").run {
+            init(mode, SecretKeySpec(key, AEMK_ALGORITHM), GCMParameterSpec(128, nonce))
+            if (aad != null) updateAAD(aad)
+            doFinal(input)
+        }
     }
 
     fun endif(ikm: ByteArray, salt: ByteArray, info: ByteArray, length: Int): ByteArray {
@@ -211,13 +216,9 @@ class NoiseHandshakeState(mode: Int) {
     }
 
     fun encryptAndHash(plaintext: ByteArray): ByteArray {
-        val key = cipherKey ?: ByteArray(32)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
-            init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, AEMK_ALGORITHM), GCMParameterSpec(128, ByteArray(12)))
-            updateAAD(handshakeHash)
-        }
-        return cipher.doFinal(plaintext).also { ciphertext ->
-            mixHash(ciphertext)
+        val key = checkNotNull(cipherKey) { "Handshake cipher key not initialized" }
+        return CryptoHelper.aesGcm(Cipher.ENCRYPT_MODE, key, ByteArray(12), plaintext, handshakeHash).also {
+            mixHash(it)
         }
     }
 
@@ -227,31 +228,23 @@ class NoiseHandshakeState(mode: Int) {
     }
 
     fun decryptAndHash(ct: ByteArray): ByteArray {
-        val key = cipherKey ?: ByteArray(32)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        val gcm = GCMParameterSpec(128, ByteArray(12))
-        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, AEMK_ALGORITHM), gcm)
-        c.updateAAD(handshakeHash)
-        val pt = c.doFinal(ct)
-        mixHash(ct)
-        return pt
+        val key = checkNotNull(cipherKey) { "Handshake cipher key not initialized" }
+        return CryptoHelper.aesGcm(Cipher.DECRYPT_MODE, key, ByteArray(12), ct, handshakeHash).also {
+            mixHash(ct)
+        }
     }
 
+    /**
+     * Derive 32-byte Noise chaining and cipher keys by delegating to RFC 5869 HKDF with empty info.
+     */
     private fun hkdfOutputs(chainingKey: ByteArray, inputKeyMaterial: ByteArray, outputs: Int): List<ByteArray> {
-        val prk = CryptoHelper.hkdfExtract(chainingKey, inputKeyMaterial)
-        val mac = Mac.getInstance(HKDF_ALGORITHM).apply {
-            init(SecretKeySpec(prk, HKDF_ALGORITHM))
-        }
-        val result = ArrayList<ByteArray>(outputs)
-        var previous = ByteArray(0)
-        repeat(outputs) { index ->
-            mac.reset()
-            if (previous.isNotEmpty()) mac.update(previous)
-            mac.update((index + 1).toByte())
-            previous = mac.doFinal()
-            result += previous
-        }
-        return result
+        val derived = CryptoHelper.endif(
+            ikm = inputKeyMaterial,
+            salt = chainingKey,
+            info = ByteArray(0),
+            length = outputs * 32
+        )
+        return List(outputs) { i -> derived.copyOfRange(i * 32, (i + 1) * 32) }
     }
 }
 
@@ -265,9 +258,7 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
      */
     fun encrypt(plain: ByteArray): ByteArray {
         val padded = pad32(plain)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(wKey, AEMK_ALGORITHM), GCMParameterSpec(128, nonce(wCtr++)))
-        return c.doFinal(padded)
+        return CryptoHelper.aesGcm(Cipher.ENCRYPT_MODE, wKey, nonce(wCtr++), padded)
     }
 
     /**
@@ -275,9 +266,7 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
      * Throw GeneralSecurityException if GCM tag verification or 32-byte padding validation fails.
      */
     fun decrypt(cipher: ByteArray): ByteArray {
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(rKey, AEMK_ALGORITHM), GCMParameterSpec(128, nonce(rCtr++)))
-        val padded = c.doFinal(cipher)
+        val padded = CryptoHelper.aesGcm(Cipher.DECRYPT_MODE, rKey, nonce(rCtr++), cipher)
         return unpad32(padded) ?: throw GeneralSecurityException("Invalid caBLE transport padding")
     }
 
