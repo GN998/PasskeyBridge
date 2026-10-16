@@ -46,6 +46,31 @@ object CtapMapper {
                 pubKeyParams.put(JSONObject(param))
             }
             put("pubKeyCredParams", pubKeyParams)
+
+            // Forward excludeList to prevent re-registration of existing credentials
+            req.excludeList?.takeIf { it.isNotEmpty() }?.let { list ->
+                val excludeArray = JSONArray()
+                for (item in list) {
+                    excludeArray.put(JSONObject().apply {
+                        put("type", item.type)
+                        put("id", CryptoUtils.encodeBase64UrlNoPadding(item.id))
+                    })
+                }
+                put("excludeCredentials", excludeArray)
+            }
+
+            // Translate CTAP2 rk and uv options into WebAuthn authenticatorSelection so passkeys are created as discoverable credentials
+            val rkRequired = req.options?.get("rk") ?: true
+            val uvRequired = req.options?.get("uv")
+            put("authenticatorSelection", JSONObject().apply {
+                put("residentKey", if (rkRequired) "required" else "preferred")
+                put("requireResidentKey", rkRequired)
+                put("userVerification", when (uvRequired) {
+                    true -> "required"
+                    false -> "discouraged"
+                    null -> "preferred"
+                })
+            })
         }.toString()
     }
 

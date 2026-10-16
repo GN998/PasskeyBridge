@@ -13,10 +13,14 @@ class TunnelWebsocket(
     private val onMessageReceived: (ByteArray) -> Unit,
     private val onStatusUpdate: ((String) -> Unit)? = null
 ) {
+    // Enable 15-second ping interval to prevent idle tunnel drops while user interacts with biometric/PIN prompts
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     private var webSocket: WebSocket? = null
@@ -34,6 +38,12 @@ class TunnelWebsocket(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                // Verify the negotiated WebSocket subprotocol matches "fido.cable" per CTAP 2.3 §11.5.1.1.1
+                val negotiatedSubprotocol = response.header("Sec-WebSocket-Protocol")
+                if (negotiatedSubprotocol != null && !negotiatedSubprotocol.equals("fido.cable", ignoreCase = true)) {
+                    Log.w("TunnelWebsocket", "Unexpected WebSocket subprotocol: $negotiatedSubprotocol")
+                }
+
                 val msg = "WebSocket Tunnel Connected to $domain!"
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)

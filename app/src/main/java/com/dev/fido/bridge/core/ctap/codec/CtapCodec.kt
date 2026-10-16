@@ -75,6 +75,25 @@ object CtapCodec {
                 )
             }
 
+            // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
+            val excludeListRaw = map[5L] as? List<*>
+            val excludeList = excludeListRaw?.map { item ->
+                val descMap = item as? Map<*, *>
+                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "excludeList element must be a map")
+                val type = descMap["type"] as? String ?: "public-key"
+                val id = descMap["id"] as? ByteArray
+                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in excludeList descriptor")
+                CredentialDescriptor(type = type, id = id)
+            }
+
+            // Extract options (key 7) such as resident key (rk) and user verification (uv) requirements
+            val optionsRaw = map[7L] as? Map<*, *>
+            val options = optionsRaw?.entries?.mapNotNull { (k, v) ->
+                val keyStr = k as? String
+                val valBool = v as? Boolean
+                if (keyStr != null && valBool != null) keyStr to valBool else null
+            }?.toMap()
+
             Ctap2Request.MakeCredential(
                 clientDataHash = clientDataHash,
                 rpId = rpId,
@@ -82,7 +101,52 @@ object CtapCodec {
                 userId = userId,
                 userName = userName,
                 userDisplayName = userDisplayName,
-                pubKeyCredParams = pubKeyCredParams
+                pubKeyCredParams = pubKeyCredParams,
+                excludeList = excludeList,
+                options = options
+            )
+        } catch (e: CtapCodecException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("CtapCodec", "MakeCredential decode error", e)
+            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid MakeCredential CBOR payload", e)
+        }
+    }
+
+    private fun decodeGetAssertion(cborBytes: ByteArray): Ctap2Request.GetAssertion {
+        return try {
+            val map = SimpleCbor.read(cborBytes) as? Map<*, *>
+                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "GetAssertion request must be a CBOR map")
+
+            val rpId = map[1L] as? String
+                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing rpId (key 1)")
+            val clientDataHash = map[2L] as? ByteArray
+                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing clientDataHash (key 2)")
+
+            val allowListRaw = map[3L] as? List<*>
+            val allowList = allowListRaw?.map { item ->
+                val descMap = item as? Map<*, *>
+                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "allowList element must be a map")
+                val type = descMap["type"] as? String ?: "public-key"
+                val id = descMap["id"] as? ByteArray
+                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in allowList descriptor")
+                CredentialDescriptor(type = type, id = id)
+            }
+
+            // Map CTAP2 options (key 5) uv flag to WebAuthn userVerification requirement
+            val optionsRaw = map[5L] as? Map<*, *>
+            val uvFlag = optionsRaw?.get("uv") as? Boolean
+            val userVerification = when (uvFlag) {
+                true -> "required"
+                false -> "discouraged"
+                null -> "preferred"
+            }
+
+            Ctap2Request.GetAssertion(
+                rpId = rpId,
+                clientDataHash = clientDataHash,
+                allowList = allowList,
+                userVerification = userVerification
             )
         } catch (e: CtapCodecException) {
             throw e

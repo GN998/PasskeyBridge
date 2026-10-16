@@ -10,6 +10,7 @@ sealed class Ctap2Request {
         val userVerification: String? = null
     ) : Ctap2Request()
 
+    // Add optional excludeList and options with default values to preserve backwards compatibility
     data class MakeCredential(
         val clientDataHash: ByteArray,
         val rpId: String,
@@ -17,7 +18,9 @@ sealed class Ctap2Request {
         val userId: ByteArray,
         val userName: String,
         val userDisplayName: String,
-        val pubKeyCredParams: List<Map<String, Any>> = emptyList()
+        val pubKeyCredParams: List<Map<String, Any>> = emptyList(),
+        val excludeList: List<CredentialDescriptor>? = null,
+        val options: Map<String, Boolean>? = null
     ) : Ctap2Request()
 }
 
@@ -46,7 +49,6 @@ sealed class Ctap2Response {
     data class MakeCredentialResponse(
         val fmt: String = "none",
         val authData: ByteArray,
-        // Fix: Use Map<*, *> to support nested CBOR elements (like ByteArray signatures)
         val attStmt: Map<*, *> = emptyMap<Any, Any>()
     ) : Ctap2Response()
 
