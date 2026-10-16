@@ -2,7 +2,6 @@ package com.dev.fido.bridge.core.security
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.security.MessageDigest
 
 object DomainDerivation {
     private val ASSIGNED_DOMAINS = listOf("cable.ua5v.com", "cable.auth.com")
@@ -21,7 +20,7 @@ object DomainDerivation {
         buffer.put(((tunnelId shr 8) and 0xFF).toByte())
         buffer.put(0.toByte())
 
-        val digest = MessageDigest.getInstance("SHA-256").digest(buffer.array())
+        val digest = CryptoUtils.sha256(buffer.array())
         var v = ByteBuffer.wrap(digest, 0, 8).order(ByteOrder.LITTLE_ENDIAN).long
 
         val tldIndex = (v and 3L).toInt()
@@ -33,7 +32,7 @@ object DomainDerivation {
             ret += base32Chars[(v and 31L).toInt()]
             v = v ushr 5
         }
-        
+
         val tlds = arrayOf(".com", ".org", ".net", ".info")
         ret += tlds[tldIndex and 3]
 

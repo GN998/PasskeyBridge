@@ -1,6 +1,7 @@
 package com.dev.fido.bridge.feature.uri
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
@@ -12,7 +13,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
@@ -25,6 +25,9 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     private lateinit var sessionController: BridgeSessionController
     private val PERMISSION_REQUEST_CODE = 1001
 
+    private val bluetoothAdapter: BluetoothAdapter?
+        get() = (getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         tv = TextView(this).apply {
@@ -33,7 +36,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             setPadding(50, 100, 50, 0)
         }
         setContentView(tv)
-        
+
         checkAndRequestPermissions()
     }
 
@@ -71,15 +74,11 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     private fun initializeController() {
         if (::sessionController.isInitialized) return
 
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val bluetoothAdapter = bluetoothManager.adapter
-        val bleAdvertiser = bluetoothAdapter?.bluetoothLeAdvertiser
-
-        val hybridBleAdvertiser = HybridBleAdvertiser(bleAdvertiser)
+        val hybridBleAdvertiser = HybridBleAdvertiser(bluetoothAdapter?.bluetoothLeAdvertiser)
         val transportManager = TransportManager(hybridBleAdvertiser)
-        
+
         sessionController = BridgeSessionController(this, transportManager)
-        
+
         // Append background network and crypto status directly to UI TextView
         sessionController.onStatusUpdate = { status ->
             tv.append("\n➜ $status")
@@ -96,30 +95,28 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
     private fun handleIntent(intent: Intent?) {
         // Verify Bluetooth is enabled before starting a caBLE session so users are not stuck waiting on silent BLE failure
-        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        val bluetoothAdapter = bluetoothManager.adapter
-        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
             tv.text = "Bluetooth is turned off.\nPlease enable Bluetooth and scan the FIDO QR code again."
             return
         }
 
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
-        
+
         if (uriString != null) {
             // Start status output directly from Parsing without exposing raw FIDO URI payload on screen
             tv.text = "Parsing..."
             val qrData = HybridQrParser.parse(uriString)
-            
+
             if (qrData != null) {
                 tv.append("\nParsed successfully. Routing to CTAP Dispatcher...")
-                
+
                 lifecycleScope.launch {
                     try {
-                        // Use authenticator's configured BuildConfig.TUNNEL_ID (e.g. 267) per CTAP 2.3 §11.5.1.1.1
                         sessionController.onQrCodeScanned(
                             qrData.publicKey,
                             qrData.secret,
-                            BuildConfig.TUNNEL_ID
+                            qrData.tunnelServerId
                         )
                         tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
                     } catch (e: Exception) {
