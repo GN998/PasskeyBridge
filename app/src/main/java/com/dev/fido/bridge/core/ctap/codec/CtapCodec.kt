@@ -151,39 +151,6 @@ object CtapCodec {
         } catch (e: CtapCodecException) {
             throw e
         } catch (e: Exception) {
-            Log.e("CtapCodec", "MakeCredential decode error", e)
-            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid MakeCredential CBOR payload", e)
-        }
-    }
-
-    private fun decodeGetAssertion(cborBytes: ByteArray): Ctap2Request.GetAssertion {
-        return try {
-            val map = SimpleCbor.read(cborBytes) as? Map<*, *>
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "GetAssertion request must be a CBOR map")
-
-            val rpId = map[1L] as? String
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing rpId (key 1)")
-            val clientDataHash = map[2L] as? ByteArray
-                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing clientDataHash (key 2)")
-
-            val allowListRaw = map[3L] as? List<*>
-            val allowList = allowListRaw?.map { item ->
-                val descMap = item as? Map<*, *>
-                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "allowList element must be a map")
-                val type = descMap["type"] as? String ?: "public-key"
-                val id = descMap["id"] as? ByteArray
-                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in allowList descriptor")
-                CredentialDescriptor(type = type, id = id)
-            }
-
-            Ctap2Request.GetAssertion(
-                rpId = rpId,
-                clientDataHash = clientDataHash,
-                allowList = allowList
-            )
-        } catch (e: CtapCodecException) {
-            throw e
-        } catch (e: Exception) {
             Log.e("CtapCodec", "GetAssertion decode error", e)
             throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid GetAssertion CBOR payload", e)
         }

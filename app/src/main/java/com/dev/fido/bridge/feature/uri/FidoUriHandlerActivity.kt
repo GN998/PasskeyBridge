@@ -105,11 +105,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
         
         if (uriString != null) {
-            tv.text = "FIDO URI Captured:\n$uriString\n\nParsing..."
+            // Start status output directly from Parsing without exposing raw FIDO URI payload on screen
+            tv.text = "Parsing..."
             val qrData = HybridQrParser.parse(uriString)
             
             if (qrData != null) {
-                tv.append("\n\nParsed successfully. Routing to CTAP Dispatcher...")
+                tv.append("\nParsed successfully. Routing to CTAP Dispatcher...")
                 
                 lifecycleScope.launch {
                     try {
