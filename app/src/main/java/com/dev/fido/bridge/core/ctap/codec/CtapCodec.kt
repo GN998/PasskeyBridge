@@ -57,9 +57,13 @@ object CtapCodec {
     /**
      * Extract and cast mandatory CBOR map fields while distinguishing missing keys (0x14) from type mismatches (0x11) per CTAP 2.3 §6.
      */
-    internal inline fun <reified T> Map<*, *>.requireField(key: Any, name: String): T {
+    internal inline fun <reified T> Map<*, *>.requireField(
+        key: Any,
+        name: String,
+        missingStatus: Byte = CtapStatus.ERR_MISSING_PARAMETER
+    ): T {
         val value = this[key]
-            ?: throw CtapCodecException(CtapStatus.ERR_MISSING_PARAMETER, "Missing required parameter: $name")
+            ?: throw CtapCodecException(missingStatus, "Missing required parameter: $name")
         return value as? T
             ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "Unexpected CBOR type for parameter: $name")
     }
@@ -71,28 +75,31 @@ object CtapCodec {
         val clientDataHash = map.requireField<ByteArray>(1L, "clientDataHash")
 
         val rp = map.requireField<Map<*, *>>(2L, "rp")
-        val rpId = rp.requireField<String>("id", "rp.id")
+        val rpId = rp.requireField<String>("id", "rp.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
         val rpName = rp["name"] as? String ?: ""
 
         val user = map.requireField<Map<*, *>>(3L, "user")
-        val userId = user.requireField<ByteArray>("id", "user.id")
+        val userId = user.requireField<ByteArray>("id", "user.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
         val userName = user["name"] as? String ?: ""
         val userDisplayName = user["displayName"] as? String ?: ""
 
         val pubKeyCredParamsRaw = map.requireField<List<*>>(4L, "pubKeyCredParams")
 
-        // Validate required fields 'type' and 'alg' without non-null assertions
+        // Validate every pubKeyCredParams element and ensure at least one public-key algorithm is present per CTAP 2.3 §6.1.2 Step 3
         val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
             val paramMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
-            val type = paramMap.requireField<String>("type", "pubKeyCredParams.type")
+            val type = paramMap.requireField<String>("type", "pubKeyCredParams.type", CtapStatus.ERR_INVALID_CBOR)
             // Enforce CBOR integer type for COSEAlgorithmIdentifier per CTAP 2.3 §6.1
-            val alg = paramMap.requireField<Long>("alg", "pubKeyCredParams.alg")
+            val alg = paramMap.requireField<Long>("alg", "pubKeyCredParams.alg", CtapStatus.ERR_INVALID_CBOR)
 
             mapOf(
                 "type" to type,
                 "alg" to alg
             )
+        }
+        if (pubKeyCredParams.none { it["type"] == "public-key" }) {
+            throw CtapCodecException(CtapStatus.ERR_UNSUPPORTED_ALGORITHM, "No supported public-key algorithm in pubKeyCredParams")
         }
 
         // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
@@ -105,6 +112,11 @@ object CtapCodec {
             val valBool = v as? Boolean
             if (keyStr != null && valBool != null) keyStr to valBool else null
         }?.toMap()
+
+        // Reject explicit "up" option in MakeCredential since FIDO_2_0 authenticators must return CTAP2_ERR_INVALID_OPTION if "up" is present, and "up"=false is invalid across all versions per CTAP 2.3 §6.1
+        if (options != null && options.containsKey("up")) {
+            throw CtapCodecException(CtapStatus.ERR_INVALID_OPTION, "Option 'up' is not valid in MakeCredential")
+        }
 
         return Ctap2Request.MakeCredential(
             clientDataHash = clientDataHash,
@@ -128,8 +140,12 @@ object CtapCodec {
 
         val allowList = parseDescriptorList(map[3L], "allowList")
 
-        // Map CTAP2 options (key 5) uv flag to WebAuthn userVerification requirement
+        // Validate CTAP2 options (key 5) per CTAP 2.3 §6.2.2 Step 4
         val optionsRaw = map[5L] as? Map<*, *>
+        if (optionsRaw != null && optionsRaw.containsKey("rk")) {
+            // Reject prohibited "rk" option in GetAssertion per CTAP 2.3 §6.2.2 Step 4.4
+            throw CtapCodecException(CtapStatus.ERR_UNSUPPORTED_OPTION, "Option 'rk' is not supported in GetAssertion")
+        }
         val uvFlag = optionsRaw?.get("uv") as? Boolean
 
         return Ctap2Request.GetAssertion(
@@ -149,7 +165,7 @@ object CtapCodec {
             val descMap = item as? Map<*, *>
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName element must be a map")
             val type = descMap["type"] as? String ?: "public-key"
-            val id = descMap.requireField<ByteArray>("id", "$fieldName.id")
+            val id = descMap.requireField<ByteArray>("id", "$fieldName.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
             CredentialDescriptor(type = type, id = id)
         }
     }
@@ -236,7 +252,14 @@ object CtapCodec {
                     }
                     5 -> {
                         val map = linkedMapOf<Any?, Any?>()
-                        for (i in 0 until value) map[readItem()] = readItem()
+                        for (i in 0 until value) {
+                            val k = readItem()
+                            // Reject duplicate map keys per CTAP 2.3 §8 canonical CBOR decoding rules
+                            if (map.containsKey(k)) {
+                                throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Duplicate CBOR map key: $k")
+                            }
+                            map[k] = readItem()
+                        }
                         map
                     }
                     7 -> {

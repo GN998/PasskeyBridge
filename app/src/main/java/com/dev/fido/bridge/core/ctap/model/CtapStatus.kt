@@ -11,5 +11,7 @@ object CtapStatus {
     const val ERR_CREDENTIAL_EXCLUDED: Byte = 0x19
     const val ERR_UNSUPPORTED_ALGORITHM: Byte = 0x26
     const val ERR_OPERATION_DENIED: Byte = 0x27
+    const val ERR_UNSUPPORTED_OPTION: Byte = 0x2B
+    const val ERR_INVALID_OPTION: Byte = 0x2C
     const val ERR_NO_CREDENTIALS: Byte = 0x2E
 }

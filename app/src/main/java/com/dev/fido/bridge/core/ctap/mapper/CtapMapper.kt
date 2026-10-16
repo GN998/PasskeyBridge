@@ -51,8 +51,8 @@ object CtapMapper {
                 put("excludeCredentials", list.toJsonArray())
             }
 
-            // Translate CTAP2 rk and uv options into WebAuthn authenticatorSelection so passkeys are created as discoverable credentials
-            val rkRequired = req.options?.get("rk") ?: true
+            // Default absent "rk" option to false per CTAP 2.3 §6.1.2 Step 5 while preferring discoverable credentials on Android CredentialManager when not strictly required
+            val rkRequired = req.options?.get("rk") ?: false
             val uvRequired = req.options?.get("uv")
             put("authenticatorSelection", JSONObject().apply {
                 put("residentKey", if (rkRequired) "required" else "preferred")

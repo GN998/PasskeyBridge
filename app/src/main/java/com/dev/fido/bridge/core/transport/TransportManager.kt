@@ -172,9 +172,10 @@ class TransportManager(
     private fun buildPostHandshakeMessage(): ByteArray {
         // Share canonical AuthenticatorInfo CBOR map to prevent capability drift between pre-flight and 0x04 GetInfo
         val getInfoBytes = CtapCodec.SimpleCbor.write(AuthenticatorInfo.toCborMap())
+        // Advertise only "ctap" support in Key 3 so clients do not send unimplemented typeJSON (0x03) Digital Credentials frames per CTAP 2.3 §11.5
         val postHandshakeMap = mapOf(
             1L to getInfoBytes,
-            3L to listOf("dc", "ctap")
+            3L to listOf("ctap")
         )
         return CtapCodec.SimpleCbor.write(postHandshakeMap)
     }
