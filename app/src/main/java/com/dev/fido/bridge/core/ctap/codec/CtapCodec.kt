@@ -1,10 +1,11 @@
 package com.dev.fido.bridge.core.ctap.codec
 
 import android.util.Log
+import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
+import com.dev.fido.bridge.core.ctap.model.CredentialDescriptor
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
-import com.dev.fido.bridge.core.ctap.model.CredentialDescriptor
 import java.io.ByteArrayOutputStream
 
 /**
@@ -15,6 +16,15 @@ class CtapCodecException(
     message: String,
     cause: Throwable? = null
 ) : IllegalArgumentException(message, cause)
+
+/**
+ * Map CTAP2 boolean "uv" option flag to WebAuthn userVerification requirement string.
+ */
+fun Boolean?.toWebAuthnUv(): String = when (this) {
+    true -> "required"
+    false -> "discouraged"
+    null -> "preferred"
+}
 
 object CtapCodec {
 
@@ -27,7 +37,7 @@ object CtapCodec {
 
         // Validate command code explicitly and throw CtapCodecException with ERR_INVALID_COMMAND (0x01)
         return when (commandByte) {
-            0x04.toByte() -> Ctap2Request.GetInfo()
+            0x04.toByte() -> Ctap2Request.GetInfo
             0x01.toByte() -> decodeMakeCredential(cborBytes)
             0x02.toByte() -> decodeGetAssertion(cborBytes)
             else -> throw CtapCodecException(
@@ -60,7 +70,7 @@ object CtapCodec {
 
             val pubKeyCredParamsRaw = map[4L] as? List<*> ?: emptyList<Any>()
 
-            // Safely validate required fields 'type' and 'alg' without non-null assertions (!!)
+            // Validate required fields 'type' and 'alg' without non-null assertions
             val pubKeyCredParams = pubKeyCredParamsRaw.map { item ->
                 val paramMap = item as? Map<*, *>
                     ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "pubKeyCredParams element must be a map")
@@ -76,15 +86,7 @@ object CtapCodec {
             }
 
             // Extract excludeList (key 5) to prevent duplicate credential registration on the authenticator
-            val excludeListRaw = map[5L] as? List<*>
-            val excludeList = excludeListRaw?.map { item ->
-                val descMap = item as? Map<*, *>
-                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "excludeList element must be a map")
-                val type = descMap["type"] as? String ?: "public-key"
-                val id = descMap["id"] as? ByteArray
-                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in excludeList descriptor")
-                CredentialDescriptor(type = type, id = id)
-            }
+            val excludeList = parseDescriptorList(map[5L], "excludeList")
 
             // Extract options (key 7) such as resident key (rk) and user verification (uv) requirements
             val optionsRaw = map[7L] as? Map<*, *>
@@ -123,30 +125,17 @@ object CtapCodec {
             val clientDataHash = map[2L] as? ByteArray
                 ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing clientDataHash (key 2)")
 
-            val allowListRaw = map[3L] as? List<*>
-            val allowList = allowListRaw?.map { item ->
-                val descMap = item as? Map<*, *>
-                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "allowList element must be a map")
-                val type = descMap["type"] as? String ?: "public-key"
-                val id = descMap["id"] as? ByteArray
-                    ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in allowList descriptor")
-                CredentialDescriptor(type = type, id = id)
-            }
+            val allowList = parseDescriptorList(map[3L], "allowList")
 
             // Map CTAP2 options (key 5) uv flag to WebAuthn userVerification requirement
             val optionsRaw = map[5L] as? Map<*, *>
             val uvFlag = optionsRaw?.get("uv") as? Boolean
-            val userVerification = when (uvFlag) {
-                true -> "required"
-                false -> "discouraged"
-                null -> "preferred"
-            }
 
             Ctap2Request.GetAssertion(
                 rpId = rpId,
                 clientDataHash = clientDataHash,
                 allowList = allowList,
-                userVerification = userVerification
+                userVerification = uvFlag.toWebAuthnUv()
             )
         } catch (e: CtapCodecException) {
             throw e
@@ -156,19 +145,26 @@ object CtapCodec {
         }
     }
 
+    /**
+     * Parse CBOR array of PublicKeyCredentialDescriptor maps shared by MakeCredential and GetAssertion.
+     */
+    private fun parseDescriptorList(rawList: Any?, fieldName: String): List<CredentialDescriptor>? {
+        val list = rawList as? List<*> ?: return null
+        return list.map { item ->
+            val descMap = item as? Map<*, *>
+                ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName element must be a map")
+            val type = descMap["type"] as? String ?: "public-key"
+            val id = descMap["id"] as? ByteArray
+                ?: throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Missing id in $fieldName descriptor")
+            CredentialDescriptor(type = type, id = id)
+        }
+    }
+
     fun encodeResponse(response: Ctap2Response): ByteArray {
         return when (response) {
             is Ctap2Response.ErrorResponse -> byteArrayOf(response.errorCode)
             is Ctap2Response.GetInfoResponse -> {
-                val map = mapOf(
-                    1L to response.versions,
-                    2L to response.extensions,
-                    3L to response.aaguid,
-                    4L to response.options,
-                    5L to response.maxMsgSize.toLong(),
-                    6L to response.pinUvAuthProtocols.map { it.toLong() }
-                )
-                byteArrayOf(CtapStatus.SUCCESS) + SimpleCbor.write(map)
+                byteArrayOf(CtapStatus.SUCCESS) + SimpleCbor.write(AuthenticatorInfo.toCborMap(response))
             }
             is Ctap2Response.MakeCredentialResponse -> {
                 val map = mapOf(
@@ -211,7 +207,7 @@ object CtapCodec {
                 val b = readByte()
                 val majorType = b shr 5
                 val info = b and 0x1F
-                
+
                 // Decode 64-bit integers (info == 27) properly to prevent silent data corruption on large values
                 val value: Long = when {
                     info < 24 -> info.toLong()
@@ -233,7 +229,7 @@ object CtapCodec {
                     }
                     else -> return null
                 }
-                
+
                 return when (majorType) {
                     0 -> value
                     1 -> -1L - value

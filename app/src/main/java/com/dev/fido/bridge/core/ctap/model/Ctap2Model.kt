@@ -1,8 +1,9 @@
 package com.dev.fido.bridge.core.ctap.model
 
 sealed class Ctap2Request {
-    data class GetInfo(val dummy: Boolean = true) : Ctap2Request()
-    
+    // Use singleton data object to avoid allocating dummy fields for stateless GetInfo requests
+    data object GetInfo : Ctap2Request()
+
     data class GetAssertion(
         val rpId: String,
         val clientDataHash: ByteArray,
@@ -10,7 +11,6 @@ sealed class Ctap2Request {
         val userVerification: String? = null
     ) : Ctap2Request()
 
-    // Add optional excludeList and options with default values to preserve backwards compatibility
     data class MakeCredential(
         val clientDataHash: ByteArray,
         val rpId: String,

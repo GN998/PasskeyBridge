@@ -1,5 +1,8 @@
 package com.dev.fido.bridge.core.ctap.mapper
 
+import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.ctap.codec.toWebAuthnUv
+import com.dev.fido.bridge.core.ctap.model.CredentialDescriptor
 import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.security.CryptoUtils
@@ -16,14 +19,7 @@ object CtapMapper {
             put("userVerification", req.userVerification ?: "preferred")
 
             req.allowList?.let { list ->
-                val allowArray = JSONArray()
-                for (item in list) {
-                    allowArray.put(JSONObject().apply {
-                        put("type", item.type)
-                        put("id", CryptoUtils.encodeBase64UrlNoPadding(item.id))
-                    })
-                }
-                put("allowCredentials", allowArray)
+                put("allowCredentials", list.toJsonArray())
             }
         }.toString()
     }
@@ -49,14 +45,7 @@ object CtapMapper {
 
             // Forward excludeList to prevent re-registration of existing credentials
             req.excludeList?.takeIf { it.isNotEmpty() }?.let { list ->
-                val excludeArray = JSONArray()
-                for (item in list) {
-                    excludeArray.put(JSONObject().apply {
-                        put("type", item.type)
-                        put("id", CryptoUtils.encodeBase64UrlNoPadding(item.id))
-                    })
-                }
-                put("excludeCredentials", excludeArray)
+                put("excludeCredentials", list.toJsonArray())
             }
 
             // Translate CTAP2 rk and uv options into WebAuthn authenticatorSelection so passkeys are created as discoverable credentials
@@ -65,13 +54,21 @@ object CtapMapper {
             put("authenticatorSelection", JSONObject().apply {
                 put("residentKey", if (rkRequired) "required" else "preferred")
                 put("requireResidentKey", rkRequired)
-                put("userVerification", when (uvRequired) {
-                    true -> "required"
-                    false -> "discouraged"
-                    null -> "preferred"
-                })
+                put("userVerification", uvRequired.toWebAuthnUv())
             })
         }.toString()
+    }
+
+    /**
+     * Convert list of CTAP CredentialDescriptors into WebAuthn allowCredentials/excludeCredentials JSONArray.
+     */
+    private fun List<CredentialDescriptor>.toJsonArray(): JSONArray = JSONArray().apply {
+        forEach { item ->
+            put(JSONObject().apply {
+                put("type", item.type)
+                put("id", CryptoUtils.encodeBase64UrlNoPadding(item.id))
+            })
+        }
     }
 
     fun parseAssertionResponseJson(jsonResponseStr: String, credentialId: ByteArray): Ctap2Response.GetAssertionResponse {
@@ -87,10 +84,10 @@ object CtapMapper {
     fun parseMakeCredentialResponseJson(jsonResponseStr: String): Ctap2Response.MakeCredentialResponse {
         val responseObj = JSONObject(jsonResponseStr).getJSONObject("response")
         val attestationObjectBytes = CryptoUtils.decodeBase64Url(responseObj.getString("attestationObject"))
-        
+
         // Decode the CBOR attestationObject into fmt, authData, and attStmt
-        val map = com.dev.fido.bridge.core.ctap.codec.CtapCodec.SimpleCbor.read(attestationObjectBytes) as Map<*, *>
-        
+        val map = CtapCodec.SimpleCbor.read(attestationObjectBytes) as Map<*, *>
+
         return Ctap2Response.MakeCredentialResponse(
             fmt = map["fmt"] as String,
             authData = map["authData"] as ByteArray,
