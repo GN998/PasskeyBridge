@@ -182,6 +182,10 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         // Append background network and crypto status directly to UI TextView
         sessionController.onStatusUpdate = { status ->
             tv.append("\n➜ $status")
+            // Release active URI guard upon session termination or error so users can rescan the same QR code
+            if (status.startsWith("CTAP ") || status.startsWith("Peer closed") || status.startsWith("WebSocket Error")) {
+                activeFidoUri = null
+            }
         }
     }
 
@@ -227,6 +231,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                         )
                         tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
                     } catch (e: Exception) {
+                        activeFidoUri = null
                         Log.e("FidoUriHandler", "Error starting session", e)
                         tv.append("\n\nError: ${e.message}")
                     }

@@ -21,12 +21,13 @@ class TunnelWebsocket(
 ) {
     companion object {
         // Share a single OkHttpClient instance across sessions to reuse connection pools and thread dispatchers.
-        // Enable 15-second ping interval to prevent idle tunnel drops while user interacts with biometric/PIN prompts.
+        // Disable read timeout and use a 5-second ping interval to prevent aggressive OEM background freezing
+        // or NAT idle drops while the user interacts with external credential manager UIs.
         private val sharedClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .pingInterval(15, TimeUnit.SECONDS)
+            .pingInterval(5, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .build()
