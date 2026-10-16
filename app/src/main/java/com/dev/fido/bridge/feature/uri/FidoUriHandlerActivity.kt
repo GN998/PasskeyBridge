@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
@@ -114,11 +115,11 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                 
                 lifecycleScope.launch {
                     try {
-                        // Pass extracted tunnelServerId from QR payload to prevent routing to wrong tunnel domain
+                        // Use authenticator's configured BuildConfig.TUNNEL_ID (e.g. 267) per CTAP 2.3 §11.5.1.1.1
                         sessionController.onQrCodeScanned(
                             qrData.publicKey,
                             qrData.secret,
-                            qrData.tunnelServerId
+                            BuildConfig.TUNNEL_ID
                         )
                         tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
                     } catch (e: Exception) {
