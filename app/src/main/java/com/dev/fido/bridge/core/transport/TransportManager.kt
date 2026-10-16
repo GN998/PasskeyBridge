@@ -7,20 +7,27 @@ import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
 import com.dev.fido.bridge.core.transport.websocket.TunnelWebsocket
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.launch
 
 class TransportManager(
     private val bleAdvertiser: HybridBleAdvertiser
 ) {
     private val noiseSession = NoiseSession()
     private var tunnelWebsocket: TunnelWebsocket? = null
+    private val transportScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     var onStatusUpdate: ((String) -> Unit)? = null
 
+    // Support suspending callback to prevent blocking OkHttp reader thread during UI credential prompts
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
         domainId: Int = BuildConfig.TUNNEL_ID,
-        onRequestReceived: (ByteArray) -> ByteArray
+        onRequestReceived: suspend (ByteArray) -> ByteArray
     ) {
         val uncompressedPeerKey = CryptoHelper.decompressECKey(peerPublicKey)
         noiseSession.setPeerPublicKey(uncompressedPeerKey)
@@ -36,7 +43,7 @@ class TransportManager(
             domainId = domainId,
             ephemeralTunnelId = ephemeralTunnelId,
             onConnected = { routingId ->
-                // 1. Generate the single 16-byte advertPlaintext seed (containing timestamp, routingId, domainId)
+                // 1. Generate the single 16-byte advertPlaintext seed (containing nonce, routingId, domainId)
                 val advertPlaintext = CryptoHelper.generateSeed(routingId, domainId)
 
                 // 2. Derive 64-byte eidKey from qrSecret (psk)
@@ -69,6 +76,9 @@ class TransportManager(
                 try {
                     if (!noiseSession.isHandshakeComplete) {
                         Log.d("TransportManager", "Received ClientHello, processing Noise KNpsk0 handshake...")
+                        // Stop BLE proximity advertising immediately once peer proves possession of EID via ClientHello
+                        bleAdvertiser.stopAdvertising()
+
                         val serverHello = noiseSession.processClientHelloAndGenerateServerHello(encryptedFrame)
                         tunnelWebsocket?.sendFrame(serverHello)
                         
@@ -90,11 +100,23 @@ class TransportManager(
                                 onStatusUpdate?.invoke(logMsg)
                                 
                                 val ctapReq = decrypted.copyOfRange(1, decrypted.size)
-                                val response = onRequestReceived(ctapReq)
-                                val framedResponse = byteArrayOf(0x01) + response
-                                tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+                                // Dispatch CTAP request asynchronously so WebSocket reader thread remains responsive
+                                transportScope.launch {
+                                    try {
+                                        val response = onRequestReceived(ctapReq)
+                                        val framedResponse = byteArrayOf(0x01) + response
+                                        tunnelWebsocket?.sendFrame(noiseSession.encrypt(framedResponse))
+                                    } catch (e: Exception) {
+                                        Log.e("TransportManager", "Error processing CTAP request", e)
+                                        onStatusUpdate?.invoke("CTAP Error: ${e.message}")
+                                    }
+                                }
                             }
-                            0x00 -> Log.d("TransportManager", "Received Control/ACK message")
+                            0x00 -> {
+                                // Close session cleanly upon receiving client shutdown message (typeShutdown = 0) per CTAP 2.3 §11.5
+                                Log.d("TransportManager", "Received Shutdown message (0x00), closing tunnel.")
+                                stopSession()
+                            }
                             else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
                         }
                     }
@@ -112,13 +134,14 @@ class TransportManager(
     }
 
     fun stopSession() {
+        transportScope.coroutineContext.cancelChildren()
         bleAdvertiser.stopAdvertising()
         tunnelWebsocket?.close()
     }
 
     private fun buildPostHandshakeMessage(): ByteArray {
         val getInfoMap = mapOf(
-            // Fix for Bug 6: Include "FIDO_2_3" in versions and update transport string "cable" to "hybrid" per CTAP 2.3 §6.4 & §11.5
+            // Include "FIDO_2_3" in versions and update transport string "cable" to "hybrid" per CTAP 2.3 §6.4 & §11.5
             1L to listOf("FIDO_2_0", "FIDO_2_1", "FIDO_2_3"),
             3L to ByteArray(16), 
             4L to mapOf("rk" to true, "up" to true, "uv" to true, "plat" to false),

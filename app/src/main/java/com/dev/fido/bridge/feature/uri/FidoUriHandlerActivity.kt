@@ -92,7 +92,6 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
         
         if (uriString != null) {
-            // Omit raw URI string on UI to prevent leaking sensitive QR secrets and curve points
             tv.text = "Parsing..."
             val qrData = HybridQrParser.parse(uriString)
             
@@ -101,7 +100,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                 
                 lifecycleScope.launch {
                     try {
-                        sessionController.onQrCodeScanned(qrData.publicKey, qrData.secret)
+                        // Pass extracted tunnelServerId from QR payload to prevent routing to wrong tunnel domain
+                        sessionController.onQrCodeScanned(
+                            qrData.publicKey,
+                            qrData.secret,
+                            qrData.tunnelServerId
+                        )
                         tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
                     } catch (e: Exception) {
                         Log.e("FidoUriHandler", "Error starting session", e)
@@ -113,6 +117,14 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             }
         } else {
             tv.text = "No URI provided. Waiting for FIDO URI intent.\nMake sure you scan a valid FIDO QR code."
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Ensure active BLE advertising and WebSocket connections are terminated when Activity exits
+        if (::sessionController.isInitialized) {
+            sessionController.stopSession()
         }
     }
 }

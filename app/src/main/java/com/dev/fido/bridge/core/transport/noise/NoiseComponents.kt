@@ -1,9 +1,13 @@
 package com.dev.fido.bridge.core.transport.noise
 
 import java.security.KeyFactory
+import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
 import java.security.spec.ECPoint
 import java.security.spec.ECPublicKeySpec
 import java.security.spec.X509EncodedKeySpec
@@ -19,6 +23,16 @@ const val AEMK_ALGORITHM = "AES"
 const val EC_ALGORITHM = "EC"
 
 object CryptoHelper {
+    private val secureRandom = SecureRandom()
+
+    // Cache P-256 curve parameters once to avoid expensive dummy keypair generation on every ECDH/decompression call
+    private val secp256r1Params: ECParameterSpec by lazy {
+        val kpg = KeyPairGenerator.getInstance(EC_ALGORITHM).apply {
+            initialize(ECGenParameterSpec("secp256r1"))
+        }
+        (kpg.generateKeyPair().public as ECPublicKey).params
+    }
+
     // Decompress 33-byte EC public key to 65-byte uncompressed format
     fun decompressECKey(compressed: ByteArray): ByteArray {
         if (compressed.size == 65 && compressed[0] == 0x04.toByte()) return compressed
@@ -28,11 +42,8 @@ object CryptoHelper {
         val xBytes = compressed.copyOfRange(1, 33)
         val x = java.math.BigInteger(1, xBytes)
 
-        val spec = java.security.spec.ECGenParameterSpec("secp256r1")
-        val kpg = java.security.KeyPairGenerator.getInstance(EC_ALGORITHM).apply { initialize(spec) }
-        val params = (kpg.generateKeyPair().public as ECPublicKey).params
         val p = java.math.BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16)
-        val b = params.curve.b
+        val b = secp256r1Params.curve.b
 
         val x3 = x.modPow(java.math.BigInteger.valueOf(3), p)
         val ax = x.multiply(java.math.BigInteger.valueOf(3)).mod(p)
@@ -59,14 +70,13 @@ object CryptoHelper {
         return uncompressed
     }
 
-    // Generate 16-byte advertPlaintext seed bound to routingId and timestamp
+    // Populate a full 10-byte cryptographic random nonce (bytes 1..10) per CTAP 2.3 Hybrid specification to guarantee proximity entropy
     fun generateSeed(routingId: ByteArray, domainId: Int): ByteArray {
         val seed = ByteArray(16)
-        seed[0] = 0x00
-        val timestamp = System.currentTimeMillis()
-        val buffer = java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.BIG_ENDIAN).putLong(timestamp)
-        System.arraycopy(buffer.array(), 0, seed, 1, 8)
-        System.arraycopy(routingId, 0, seed, 11, 3)
+        seed[0] = 0x00 // Flags byte (reserved, must be zero)
+        val nonce = ByteArray(10).also { secureRandom.nextBytes(it) }
+        System.arraycopy(nonce, 0, seed, 1, 10)
+        System.arraycopy(routingId, 0, seed, 11, minOf(routingId.size, 3))
         seed[14] = (domainId and 0xFF).toByte()
         seed[15] = ((domainId ushr 8) and 0xFF).toByte()
         return seed
@@ -77,6 +87,7 @@ object CryptoHelper {
         val aesKey = eidKey.copyOfRange(0, 32)
         val hmacKey = eidKey.copyOfRange(32, 64)
 
+        // Encrypt single 16-byte block using AES-256-ECB (equivalent to CBC with zero IV for a single block) per caBLE v2 spec
         val cipher = Cipher.getInstance("AES/CBC/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(aesKey, AEMK_ALGORITHM), IvParameterSpec(ByteArray(16)))
         val ciphertext = cipher.doFinal(seed)
@@ -103,9 +114,7 @@ object CryptoHelper {
             if (peerUncompressedOrDer.size == 65 && peerUncompressedOrDer[0] == 0x04.toByte()) {
                 val x = peerUncompressedOrDer.sliceArray(1..32)
                 val y = peerUncompressedOrDer.sliceArray(33..64)
-                val kg = java.security.KeyPairGenerator.getInstance(EC_ALGORITHM).apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }
-                val tmp = (kg.generateKeyPair().public as ECPublicKey).params
-                val spec = ECPublicKeySpec(ECPoint(java.math.BigInteger(1, x), java.math.BigInteger(1, y)), tmp)
+                val spec = ECPublicKeySpec(ECPoint(java.math.BigInteger(1, x), java.math.BigInteger(1, y)), secp256r1Params)
                 KeyFactory.getInstance(EC_ALGORITHM).generatePublic(spec) as ECPublicKey
             } else {
                 KeyFactory.getInstance(EC_ALGORITHM).generatePublic(X509EncodedKeySpec(peerUncompressedOrDer)) as ECPublicKey

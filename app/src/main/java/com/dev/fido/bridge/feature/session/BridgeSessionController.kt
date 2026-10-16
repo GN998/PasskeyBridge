@@ -7,11 +7,13 @@ import com.dev.fido.bridge.core.proxy.CredentialManagerProxy
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
+import com.dev.fido.bridge.core.ctap.codec.CtapCodecException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 class BridgeSessionController(
     private val context: Context,
@@ -29,25 +31,32 @@ class BridgeSessionController(
         }
 
         transportManager?.startSession(peerPublicKey, psk, domainId) { rawCtapRequest ->
-            var responseBytes = byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
-            
             try {
                 val parsedRequest = CtapCodec.decodeRequest(rawCtapRequest)
                 
-                val response = runBlocking(Dispatchers.Main) {
+                // Switch to Main dispatcher non-blockingly for Android CredentialManager UI interaction
+                val response = withContext(Dispatchers.Main) {
                     proxy.handleCtapRequest(parsedRequest)
                 }
                 
-                responseBytes = CtapCodec.encodeResponse(response)
+                CtapCodec.encodeResponse(response)
+            } catch (e: CtapCodecException) {
+                // Preserve specific CTAP status code (e.g., ERR_INVALID_COMMAND vs ERR_INVALID_CBOR)
+                Log.e("SessionController", "CTAP codec exception: 0x${"%02X".format(e.statusCode)}", e)
+                byteArrayOf(e.statusCode)
             } catch (e: IllegalArgumentException) {
                 Log.e("SessionController", "Invalid request format", e)
-                responseBytes = byteArrayOf(CtapStatus.ERR_INVALID_CBOR)
+                byteArrayOf(CtapStatus.ERR_INVALID_CBOR)
             } catch (e: Exception) {
                 Log.e("SessionController", "Unhandled exception during CTAP processing", e)
-                responseBytes = byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
+                byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
             }
-            
-            responseBytes
         }
+    }
+
+    // Release BLE advertising, WebSocket tunnel, and coroutine resources when host Activity is destroyed
+    fun stopSession() {
+        transportManager?.stopSession()
+        scope.cancel()
     }
 }
