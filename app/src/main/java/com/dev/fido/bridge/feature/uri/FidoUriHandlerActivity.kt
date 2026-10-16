@@ -20,13 +20,11 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
 import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.feature.session.BridgeSessionController
-import kotlinx.coroutines.launch
 
 class FidoUriHandlerActivity : AppCompatActivity() {
 
@@ -177,13 +175,13 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         val hybridBleAdvertiser = HybridBleAdvertiser(bluetoothAdapter?.bluetoothLeAdvertiser)
         val transportManager = TransportManager(hybridBleAdvertiser)
 
-        sessionController = BridgeSessionController(this, transportManager)
-
-        // Append background network and crypto status directly to UI TextView
-        sessionController.onStatusUpdate = { status ->
-            tv.append("\n➜ $status")
-            // Release active URI guard upon session termination or error so users can rescan the same QR code
-            if (status.startsWith("CTAP ") || status.startsWith("Peer closed") || status.startsWith("WebSocket Error")) {
+        sessionController = BridgeSessionController(this, transportManager).apply {
+            // Append background network and crypto status directly to UI TextView
+            onStatusUpdate = { status ->
+                tv.append("\n➜ $status")
+            }
+            // Reset active URI guard via explicit termination callback instead of fragile log prefix matching
+            onSessionTerminated = {
                 activeFidoUri = null
             }
         }
@@ -222,19 +220,17 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             if (qrData != null) {
                 tv.append("\nParsed successfully. Routing to CTAP Dispatcher...")
 
-                lifecycleScope.launch {
-                    try {
-                        sessionController.onQrCodeScanned(
-                            qrData.publicKey,
-                            qrData.secret,
-                            qrData.tunnelServerId
-                        )
-                        tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
-                    } catch (e: Exception) {
-                        activeFidoUri = null
-                        Log.e("FidoUriHandler", "Error starting session", e)
-                        tv.append("\n\nError: ${e.message}")
-                    }
+                try {
+                    sessionController.onQrCodeScanned(
+                        qrData.publicKey,
+                        qrData.secret,
+                        qrData.tunnelServerId
+                    )
+                    tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
+                } catch (e: Exception) {
+                    activeFidoUri = null
+                    Log.e("FidoUriHandler", "Error starting session", e)
+                    tv.append("\n\nError: ${e.message}")
                 }
             } else {
                 activeFidoUri = null

@@ -23,6 +23,8 @@ class TransportManager(
     private val transportScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     var onStatusUpdate: ((String) -> Unit)? = null
+    // Notify controller when a transaction finishes or the tunnel closes to decouple control flow from log strings
+    var onSessionTerminated: (() -> Unit)? = null
 
     // Support suspending callback to prevent blocking OkHttp reader thread during UI credential prompts
     fun startSession(
@@ -122,10 +124,12 @@ class TransportManager(
                                             } else {
                                                 onStatusUpdate?.invoke("CTAP Rejected (Status: 0x${"%02X".format(statusByte)}).")
                                             }
+                                            onSessionTerminated?.invoke()
                                         }
                                     } catch (e: Exception) {
                                         Log.e("TransportManager", "Error processing CTAP request", e)
                                         onStatusUpdate?.invoke("CTAP Error: ${e.message}")
+                                        onSessionTerminated?.invoke()
                                     }
                                 }
                             }
@@ -136,6 +140,7 @@ class TransportManager(
                                 bleAdvertiser.stopAdvertising()
                                 tunnelWebsocket?.close()
                                 tunnelWebsocket = null
+                                onSessionTerminated?.invoke()
                             }
                             else -> Log.d("TransportManager", "Received Unknown Frame Type: 0x${frameType.toString(16)}")
                         }
@@ -144,10 +149,14 @@ class TransportManager(
                     val msg = "Frame Error: ${e.message}"
                     Log.e("TransportManager", msg, e)
                     onStatusUpdate?.invoke(msg)
+                    onSessionTerminated?.invoke()
                 }
             },
             onStatusUpdate = { status ->
                 onStatusUpdate?.invoke(status)
+                if (status.startsWith("WebSocket Error")) {
+                    onSessionTerminated?.invoke()
+                }
             }
         )
         tunnelWebsocket?.connect()

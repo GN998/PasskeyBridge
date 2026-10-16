@@ -16,13 +16,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class BridgeSessionController(
-    private val context: Context,
-    private val transportManager: TransportManager? = null
+    context: Context,
+    // Require non-null TransportManager to eliminate redundant safe-call operators
+    private val transportManager: TransportManager
 ) {
     private val proxy = CredentialManagerProxy(context)
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     var onStatusUpdate: ((String) -> Unit)? = null
+    var onSessionTerminated: (() -> Unit)? = null
 
     // Default value provided for domainId to ensure backwards compatibility
     fun onQrCodeScanned(
@@ -30,11 +32,14 @@ class BridgeSessionController(
         psk: ByteArray,
         domainId: Int = TunnelConfigManager.getEffectiveTunnelId()
     ) {
-        transportManager?.onStatusUpdate = { status ->
+        transportManager.onStatusUpdate = { status ->
             scope.launch { onStatusUpdate?.invoke(status) }
         }
+        transportManager.onSessionTerminated = {
+            scope.launch { onSessionTerminated?.invoke() }
+        }
 
-        transportManager?.startSession(peerPublicKey, psk, domainId) { rawCtapRequest ->
+        transportManager.startSession(peerPublicKey, psk, domainId) { rawCtapRequest ->
             try {
                 val parsedRequest = CtapCodec.decodeRequest(rawCtapRequest)
 
@@ -57,7 +62,7 @@ class BridgeSessionController(
 
     // Release BLE advertising, WebSocket tunnel, and coroutine resources when host Activity is destroyed
     fun stopSession() {
-        transportManager?.stopSession()
+        transportManager.stopSession()
         scope.cancel()
     }
 }
