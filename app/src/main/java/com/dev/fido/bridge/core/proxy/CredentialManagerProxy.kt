@@ -60,8 +60,7 @@ class CredentialManagerProxy(private val context: Context) {
 
         return executePrivilegedRequest("GetCredential") {
             val result = credentialManager.getCredential(context, getReq)
-            val pubKeyCredential = result.credential as? PublicKeyCredential
-                ?: return@executePrivilegedRequest Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+            val pubKeyCredential = result.credential as PublicKeyCredential
 
             val responseJson = pubKeyCredential.authenticationResponseJson
             Log.d("CredentialManagerProxy", "Raw authenticationResponseJson: $responseJson")
@@ -85,8 +84,7 @@ class CredentialManagerProxy(private val context: Context) {
 
         return executePrivilegedRequest("CreateCredential") {
             val result = credentialManager.createCredential(context, createReq)
-            val pubKeyResponse = result as? CreatePublicKeyCredentialResponse
-                ?: return@executePrivilegedRequest Ctap2Response.ErrorResponse(CtapStatus.ERR_OPERATION_DENIED)
+            val pubKeyResponse = result as CreatePublicKeyCredentialResponse
 
             val responseJson = pubKeyResponse.registrationResponseJson
             Log.d("CredentialManagerProxy", "Raw registrationResponseJson: $responseJson")

@@ -32,7 +32,6 @@ object HybridQrParser {
             val tunnelServerId = TunnelConfigManager.getEffectiveTunnelId()
 
             return HybridQrData(
-                version = 2,
                 publicKey = publicKey,
                 secret = secret,
                 tunnelServerId = tunnelServerId
@@ -44,49 +43,45 @@ object HybridQrParser {
 
     // Decodes GMS Base34 (17-digit decimal groups) encoded string into CBOR byte array
     private fun decodeGmsBase34(encoded: String): ByteArray? {
-        try {
-            val length = encoded.length
-            val fullBlocks = length / 17
-            val remainder = length % 17
+        val length = encoded.length
+        val fullBlocks = length / 17
+        val remainder = length % 17
 
-            val remainingBytes = PADDING_TABLE.indexOfFirst { remainder == it }
-            if (remainingBytes == -1) return null
+        val remainingBytes = PADDING_TABLE.indexOfFirst { remainder == it }
+        if (remainingBytes == -1) return null
 
-            val totalBytes = fullBlocks * 7 + remainingBytes
-            val result = ByteArray(totalBytes)
-            val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+        val totalBytes = fullBlocks * 7 + remainingBytes
+        val result = ByteArray(totalBytes)
+        val buffer = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
 
-            // Decode full 17-digit blocks into 7 bytes each
-            for (i in 0 until fullBlocks) {
-                val digitGroup = encoded.substring(i * 17, (i + 1) * 17)
-                val longValue = digitGroup.toLongOrNull() ?: return null
+        // Decode full 17-digit blocks into 7 bytes each
+        for (i in 0 until fullBlocks) {
+            val digitGroup = encoded.substring(i * 17, (i + 1) * 17)
+            val longValue = digitGroup.toLongOrNull() ?: return null
 
-                buffer.rewind()
-                buffer.putLong(longValue)
-                buffer.rewind()
-                buffer.get(result, i * 7, 7)
+            buffer.rewind()
+            buffer.putLong(longValue)
+            buffer.rewind()
+            buffer.get(result, i * 7, 7)
 
+            if (buffer.get() != 0.toByte()) return null
+        }
+
+        // Decode trailing partial block
+        if (remainder > 0) {
+            val remainingDigits = encoded.substring(fullBlocks * 17)
+            val longValue = remainingDigits.toLongOrNull() ?: return null
+
+            buffer.rewind()
+            buffer.putLong(longValue)
+            buffer.rewind()
+            buffer.get(result, totalBytes - remainingBytes, remainingBytes)
+
+            while (buffer.hasRemaining()) {
                 if (buffer.get() != 0.toByte()) return null
             }
-
-            // Decode trailing partial block
-            if (remainder > 0) {
-                val remainingDigits = encoded.substring(fullBlocks * 17)
-                val longValue = remainingDigits.toLongOrNull() ?: return null
-
-                buffer.rewind()
-                buffer.putLong(longValue)
-                buffer.rewind()
-                buffer.get(result, totalBytes - remainingBytes, remainingBytes)
-
-                while (buffer.hasRemaining()) {
-                    if (buffer.get() != 0.toByte()) return null
-                }
-            }
-
-            return result
-        } catch (e: Exception) {
-            return null
         }
+
+        return result
     }
 }

@@ -4,7 +4,6 @@ import android.util.Log
 import com.dev.fido.bridge.core.ctap.AuthenticatorInfo
 import com.dev.fido.bridge.core.ctap.codec.CtapCodec
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
-import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
 import com.dev.fido.bridge.core.transport.noise.CryptoHelper
 import com.dev.fido.bridge.core.transport.noise.NoiseSession
@@ -33,7 +32,7 @@ class TransportManager(
     fun startSession(
         peerPublicKey: ByteArray,
         psk: ByteArray,
-        domainId: Int = TunnelConfigManager.getEffectiveTunnelId(),
+        domainId: Int,
         onRequestReceived: suspend (ByteArray) -> ByteArray
     ) {
         // Terminate any lingering WebSocket connection, BLE advertisement, or coroutine job
@@ -131,7 +130,7 @@ class TransportManager(
                                         // Defer onSessionTerminated until peer sends 0x00 Shutdown or closes WebSocket
                                         // so activeFidoUri remains guarded while the tunnel is still open.
                                         if (commandByte == 0x01.toByte() || commandByte == 0x02.toByte()) {
-                                            val statusByte = if (response.isNotEmpty()) response[0] else CtapStatus.ERR_OPERATION_DENIED
+                                            val statusByte = response[0]
                                             if (statusByte == CtapStatus.SUCCESS) {
                                                 onStatusUpdate?.invoke("CTAP Transaction Complete.")
                                             } else {

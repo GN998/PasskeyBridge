@@ -8,9 +8,7 @@ class NoiseSession {
         private set
 
     private var noiseState: NoiseHandshakeState? = null
-    @Volatile
     private var crypter: NoiseCrypter? = null
-    @Volatile
     private var peerPublicKeyBytes: ByteArray? = null
 
     // Inject the PC's public key (scanned from QR)
@@ -28,7 +26,7 @@ class NoiseSession {
         isHandshakeComplete = false
         crypter = null
 
-        val nh = NoiseHandshakeState(mode = 3) // Noise KNpsk0
+        val nh = NoiseHandshakeState()
         noiseState = nh
 
         nh.mixHash(byteArrayOf(1))
@@ -83,14 +81,12 @@ class NoiseSession {
 
     @Synchronized
     fun encrypt(plaintext: ByteArray): ByteArray {
-        check(isHandshakeComplete) { "Handshake not complete" }
         // Require initialized session crypter instead of falling back to unencrypted plaintext
-        return checkNotNull(crypter) { "Session crypter not initialized" }.encrypt(plaintext)
+        return checkNotNull(crypter) { "Handshake not complete" }.encrypt(plaintext)
     }
 
     @Synchronized
     fun decrypt(ciphertext: ByteArray): ByteArray {
-        check(isHandshakeComplete) { "Handshake not complete" }
-        return checkNotNull(crypter) { "Session crypter not initialized" }.decrypt(ciphertext)
+        return checkNotNull(crypter) { "Handshake not complete" }.decrypt(ciphertext)
     }
 }

@@ -34,7 +34,7 @@ object DomainDerivation {
         }
 
         val tlds = arrayOf(".com", ".org", ".net", ".info")
-        ret += tlds[tldIndex and 3]
+        ret += tlds[tldIndex]
 
         return ret
     }

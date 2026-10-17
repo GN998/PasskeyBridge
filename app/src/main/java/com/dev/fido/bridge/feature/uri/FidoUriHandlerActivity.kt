@@ -203,7 +203,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             return
         }
 
-        val uriString = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT)
+        val uriString = intent?.dataString
 
         if (uriString != null) {
             // Ignore duplicate intent deliveries of the exact same QR URI to avoid aborting an active CredentialManager prompt

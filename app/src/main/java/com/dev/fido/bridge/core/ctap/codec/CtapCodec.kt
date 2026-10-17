@@ -7,6 +7,7 @@ import com.dev.fido.bridge.core.ctap.model.Ctap2Request
 import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import java.io.ByteArrayOutputStream
+import java.util.Arrays
 
 /**
  * Custom exception representing CTAP codec errors with standard protocol status codes.
@@ -123,7 +124,7 @@ object CtapCodec {
         val options = parseOptionsMap(map[7L], "MakeCredential.options")
 
         // Reject explicit "up" option in MakeCredential since FIDO_2_0 authenticators must return CTAP2_ERR_INVALID_OPTION if "up" is present, and "up"=false is invalid across all versions per CTAP 2.3 §6.1
-        if (options != null && options.containsKey("up")) {
+        if (options?.containsKey("up") == true) {
             throw CtapCodecException(CtapStatus.ERR_INVALID_OPTION, "Option 'up' is not valid in MakeCredential")
         }
 
@@ -151,7 +152,7 @@ object CtapCodec {
 
         // Validate CTAP2 options (key 5) per CTAP 2.3 §6.2.2 Step 4
         val options = parseOptionsMap(map[5L], "GetAssertion.options")
-        if (options != null && options.containsKey("rk")) {
+        if (options?.containsKey("rk") == true) {
             // Reject prohibited "rk" option in GetAssertion per CTAP 2.3 §6.2.2 Step 4.4
             throw CtapCodecException(CtapStatus.ERR_UNSUPPORTED_OPTION, "Option 'rk' is not supported in GetAssertion")
         }
@@ -249,7 +250,7 @@ object CtapCodec {
                 return bytes[pos++].toInt() and 0xFF
             }
             fun readBytes(len: Int): ByteArray {
-                if (len < 0 || pos + len > bytes.size) {
+                if (pos + len > bytes.size) {
                     throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid CBOR byte string length: $len")
                 }
                 val res = bytes.copyOfRange(pos, pos + len)
@@ -420,16 +421,7 @@ object CtapCodec {
                             if (k1Bytes.size != k2Bytes.size) {
                                 k1Bytes.size.compareTo(k2Bytes.size)
                             } else {
-                                var cmp = 0
-                                for (i in k1Bytes.indices) {
-                                    val b1 = k1Bytes[i].toInt() and 0xFF
-                                    val b2 = k2Bytes[i].toInt() and 0xFF
-                                    if (b1 != b2) {
-                                        cmp = b1.compareTo(b2)
-                                        break
-                                    }
-                                }
-                                cmp
+                                Arrays.compareUnsigned(k1Bytes, k2Bytes)
                             }
                         }
                         sortedEntries.forEach { (kBytes, vl) ->

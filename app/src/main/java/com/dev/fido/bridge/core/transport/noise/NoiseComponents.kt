@@ -62,7 +62,6 @@ object CryptoHelper {
      * Decompress and validate 33-byte SEC1 compressed EC public key from QR payload into 65-byte uncompressed format per CTAP 2.3 §11.5.1.
      */
     fun decompressECKey(compressed: ByteArray): ByteArray {
-        if (compressed.size == 65 && compressed[0] == 0x04.toByte()) return compressed
         require(compressed.size == 33 && (compressed[0] == 0x02.toByte() || compressed[0] == 0x03.toByte())) {
             "Peer public key must be a 33-byte SEC1 compressed P-256 point (0x02 or 0x03 prefix)"
         }
@@ -193,15 +192,10 @@ object CryptoHelper {
     }
 }
 
-class NoiseHandshakeState(mode: Int) {
-    private val protocolName = when (mode) {
-        2 -> "Noise_NKpsk0_P256_AESGCM_SHA256"
-        3 -> "Noise_KNpsk0_P256_AESGCM_SHA256"
-        else -> "Noise_NK_P256_AESGCM_SHA256"
-    }
-
-    private var handshakeHash: ByteArray = protocolName.toByteArray() + ByteArray(32 - protocolName.length)
-    private var chainingKey: ByteArray = handshakeHash.clone()
+class NoiseHandshakeState {
+    // Initialize 32-byte Noise protocol name buffer for QR-initiated KNpsk0 handshakes per CTAP 2.3 §11.5.1.2
+    private var handshakeHash: ByteArray = "Noise_KNpsk0_P256_AESGCM_SHA256".toByteArray(Charsets.US_ASCII).copyOf(32)
+    private var chainingKey: ByteArray = handshakeHash.copyOf()
     private var cipherKey: ByteArray? = null
 
     fun mixHash(data: ByteArray) {
@@ -298,7 +292,7 @@ class NoiseCrypter(private val rKey: ByteArray, private val wKey: ByteArray) {
     private fun unpad32(padded: ByteArray): ByteArray? {
         if (padded.isEmpty()) return null
         val padLen = (padded[padded.lastIndex].toInt() and 0xFF) + 1
-        if (padLen < 1 || padLen > 32 || padLen > padded.size) return null
+        if (padLen > 32 || padLen > padded.size) return null
         val dataLen = padded.size - padLen
         return padded.copyOfRange(0, dataLen)
     }

@@ -19,7 +19,7 @@ object CtapMapper {
             // Set challenge to Base64URL-encoded clientDataHash required by Android CredentialManager WebAuthn API
             put("challenge", CryptoUtils.encodeBase64UrlNoPadding(req.clientDataHash))
             put("rpId", req.rpId)
-            put("userVerification", req.userVerification ?: "preferred")
+            put("userVerification", req.userVerification)
 
             req.allowList?.let { list ->
                 put("allowCredentials", list.toJsonArray())
@@ -40,11 +40,7 @@ object CtapMapper {
                 put("name", req.userName)
                 put("displayName", req.userDisplayName)
             })
-            val pubKeyParams = JSONArray()
-            req.pubKeyCredParams.forEach { param ->
-                pubKeyParams.put(JSONObject(param))
-            }
-            put("pubKeyCredParams", pubKeyParams)
+            put("pubKeyCredParams", JSONArray(req.pubKeyCredParams.map(::JSONObject)))
 
             // Forward excludeList to prevent re-registration of existing credentials
             req.excludeList?.takeIf { it.isNotEmpty() }?.let { list ->

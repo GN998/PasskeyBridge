@@ -8,7 +8,7 @@ sealed class Ctap2Request {
         val rpId: String,
         val clientDataHash: ByteArray,
         val allowList: List<CredentialDescriptor>? = null,
-        val userVerification: String? = null,
+        val userVerification: String,
         // Default "up" to true per CTAP 2.3 §6.2.2 Step 4.5; false indicates a silent pre-flight probe
         val userPresence: Boolean = true
     ) : Ctap2Request()
@@ -20,14 +20,14 @@ sealed class Ctap2Request {
         val userId: ByteArray,
         val userName: String,
         val userDisplayName: String,
-        val pubKeyCredParams: List<Map<String, Any>> = emptyList(),
+        val pubKeyCredParams: List<Map<String, Any>>,
         val excludeList: List<CredentialDescriptor>? = null,
         val options: Map<String, Boolean>? = null
     ) : Ctap2Request()
 }
 
 data class CredentialDescriptor(
-    val type: String = "public-key",
+    val type: String,
     val id: ByteArray,
     // Preserve optional transport hints so CredentialManager providers can route credential lookups accurately
     val transports: List<String>? = null
@@ -39,8 +39,8 @@ sealed class Ctap2Response {
         val extensions: List<String>,
         val aaguid: ByteArray,
         val options: Map<String, Boolean>,
-        val maxMsgSize: Int = 1024,
-        val pinUvAuthProtocols: List<Int> = listOf(1)
+        val maxMsgSize: Int,
+        val pinUvAuthProtocols: List<Int>
     ) : Ctap2Response()
 
     data class GetAssertionResponse(
@@ -51,9 +51,9 @@ sealed class Ctap2Response {
     ) : Ctap2Response()
 
     data class MakeCredentialResponse(
-        val fmt: String = "none",
+        val fmt: String,
         val authData: ByteArray,
-        val attStmt: Map<*, *> = emptyMap<Any, Any>()
+        val attStmt: Map<*, *>
     ) : Ctap2Response()
 
     data class ErrorResponse(val errorCode: Byte) : Ctap2Response()
