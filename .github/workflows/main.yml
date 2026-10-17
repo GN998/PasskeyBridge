@@ -10,6 +10,11 @@ on:
     branches: [ "test" ]
   workflow_dispatch:
 
+# Cancel in-progress runs on the same branch/PR when a new commit is pushed
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build Release APK
@@ -27,6 +32,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Extract Short Commit SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -36,38 +44,37 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
+          # Explicitly provision Gradle 8.14.5 into system PATH because root gradlew scripts
+          # are omitted from the repository and 'gradle assembleRelease' otherwise falls back to Runner's Gradle 9.8.1.
+          gradle-version: '8.14.5'
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       # ==========================================
       # 2. Build Process (Release)
       # ==========================================
-      # Decode Base64 keystore to file before build
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > my-release-key.jks
 
-      # Changed: Use assembleRelease instead of assembleDebug
       - name: Build Release APK
         env:
-          # Inject repository secret CUSTOM_TUNNEL_ID into Gradle build process
           CUSTOM_TUNNEL_ID: ${{ secrets.CUSTOM_TUNNEL_ID }}
-          # Inject keystore credentials into Gradle build process
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        # Execute build using assembleRelease task
-        run: gradle assembleRelease --stacktrace --parallel --build-cache --no-daemon
+        run: |
+          gradle assembleRelease --stacktrace --parallel --build-cache --no-daemon
+          mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/passkey-bridge-${SHORT_SHA}.apk"
 
       # ==========================================
       # 3. Artifact Upload
       # ==========================================
-      # Changed: Upload the signed release APK from the release outputs folder
       - name: Upload Release APK
         uses: actions/upload-artifact@v7
         with:
-          name: passkey-bridge-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          name: passkey-bridge-release-apk-${{ env.SHORT_SHA }}
+          path: app/build/outputs/apk/release/passkey-bridge-${{ env.SHORT_SHA }}.apk
           if-no-files-found: error
           retention-days: 7
