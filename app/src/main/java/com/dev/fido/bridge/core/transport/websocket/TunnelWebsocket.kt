@@ -83,6 +83,18 @@ class TunnelWebsocket(
                 Log.w("TunnelWebsocket", "Received unsupported text frame, dropping.")
             }
 
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                // Acknowledge peer close handshake so the socket transitions to onClosed cleanly
+                webSocket.close(code, reason)
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                // Notify upper layer when the peer or relay closes the WebSocket without a 0x00 frame
+                val msg = "WebSocket Closed ($code)"
+                Log.d("TunnelWebsocket", msg)
+                onStatusUpdate?.invoke(msg)
+            }
+
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 // Redact derived hostname from network exception messages (e.g., DNS resolution failures)
                 val sanitizedError = t.message?.replace(domain, "***", ignoreCase = true) ?: "Connection failed"

@@ -28,7 +28,9 @@ sealed class Ctap2Request {
 
 data class CredentialDescriptor(
     val type: String = "public-key",
-    val id: ByteArray
+    val id: ByteArray,
+    // Preserve optional transport hints so CredentialManager providers can route credential lookups accurately
+    val transports: List<String>? = null
 )
 
 sealed class Ctap2Response {

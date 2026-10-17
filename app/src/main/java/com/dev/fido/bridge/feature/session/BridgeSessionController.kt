@@ -8,10 +8,11 @@ import com.dev.fido.bridge.core.ctap.model.CtapStatus
 import com.dev.fido.bridge.core.proxy.CredentialManagerProxy
 import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.TransportManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -49,6 +50,9 @@ class BridgeSessionController(
                 }
 
                 CtapCodec.encodeResponse(response)
+            } catch (e: CancellationException) {
+                // Rethrow cancellation exceptions to respect structured concurrency lifecycles
+                throw e
             } catch (e: CtapCodecException) {
                 // Preserve specific CTAP status code (e.g., ERR_INVALID_COMMAND vs ERR_INVALID_CBOR)
                 Log.e("SessionController", "CTAP codec exception: 0x${"%02X".format(e.statusCode)}", e)
@@ -60,9 +64,9 @@ class BridgeSessionController(
         }
     }
 
-    // Release BLE advertising, WebSocket tunnel, and coroutine resources when host Activity is destroyed
+    // Release BLE advertising, WebSocket tunnel, and child coroutine jobs while keeping scope reusable
     fun stopSession() {
         transportManager.stopSession()
-        scope.cancel()
+        scope.coroutineContext.cancelChildren()
     }
 }

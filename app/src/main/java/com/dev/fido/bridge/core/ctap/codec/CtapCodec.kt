@@ -196,7 +196,16 @@ object CtapCodec {
                 ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName element must be a map")
             val type = descMap.requireField<String>("type", "$fieldName.type", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
             val id = descMap.requireField<ByteArray>("id", "$fieldName.id", CtapStatus.ERR_CBOR_UNEXPECTED_TYPE)
-            CredentialDescriptor(type = type, id = id)
+            // Validate optional transports array per CTAP 2.3 §8 external structure typing rules
+            val transports = descMap["transports"]?.let { rawTransports ->
+                val transportList = rawTransports as? List<*>
+                    ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName.transports must be a CBOR array")
+                transportList.map { t ->
+                    t as? String
+                        ?: throw CtapCodecException(CtapStatus.ERR_CBOR_UNEXPECTED_TYPE, "$fieldName.transports element must be a text string")
+                }
+            }
+            CredentialDescriptor(type = type, id = id, transports = transports)
         }
     }
 

@@ -70,6 +70,10 @@ object CtapMapper {
             put(JSONObject().apply {
                 put("type", item.type)
                 put("id", CryptoUtils.encodeBase64UrlNoPadding(item.id))
+                // Forward optional transports array when provided by the client platform
+                item.transports?.takeIf { it.isNotEmpty() }?.let { transports ->
+                    put("transports", JSONArray(transports))
+                }
             })
         }
     }
