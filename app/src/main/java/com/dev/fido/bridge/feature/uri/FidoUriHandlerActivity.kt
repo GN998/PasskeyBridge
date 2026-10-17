@@ -10,9 +10,9 @@ import android.os.Bundle
 import android.text.InputFilter
 import android.text.InputType
 import android.util.Log
-import android.view.Gravity
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -20,6 +20,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
 import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.TransportManager
@@ -41,41 +43,45 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Wrap status view and top-right settings action in a single container without XML layout overhead
-        val rootLayout = FrameLayout(this)
-
+        // Delegate title and settings button to the native ActionBar and inset status text below system bars on Android 15+
         tv = TextView(this).apply {
-            text = "Passkey Bridge\nProcessing FIDO URI..."
+            text = "Processing FIDO URI..."
             textSize = 18f
-            setPadding(50, 140, 50, 0)
         }
 
-        val settingsBtn = TextView(this).apply {
-            text = "⚙"
-            textSize = 24f
-            setPadding(40, 40, 50, 40)
-            setOnClickListener { showTunnelSettingsDialog() }
+        // Apply system bar and display cutout insets dynamically so content is never obscured under Android 15+ forced edge-to-edge
+        ViewCompat.setOnApplyWindowInsetsListener(tv) { view, windowInsets ->
+            val insets = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(
+                insets.left + 50,
+                insets.top + 40,
+                insets.right + 50,
+                insets.bottom
+            )
+            windowInsets
         }
 
-        rootLayout.addView(
-            tv,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-        rootLayout.addView(
-            settingsBtn,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END
-            )
-        )
-
-        setContentView(rootLayout)
+        setContentView(tv)
 
         checkAndRequestPermissions()
+    }
+
+    // Mount settings trigger directly inside the native ActionBar so it aligns with the app title and avoids status bar overlap
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(Menu.NONE, 1, Menu.NONE, "⚙").apply {
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        }
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 1) {
+            showTunnelSettingsDialog()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
     }
 
     /**

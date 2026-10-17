@@ -16,7 +16,7 @@
         android:label="Passkey Bridge"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Material3.DayNight">
+        android:theme="@style/Theme.PasskeyBridge">
 
         <!-- Set launchMode to singleTop so subsequent QR scans route to onNewIntent instead of spawning duplicate instances -->
         <!-- Handle configuration changes in-place so CredentialManager bottom sheets or screen rotations do not trigger onDestroy() and tear down active WebSocket tunnels -->
