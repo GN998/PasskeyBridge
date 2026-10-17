@@ -23,7 +23,8 @@ println("--> [Gradle Build Config] Successfully resolved TUNNEL_ID: $tunnelId")
 
 android {
     namespace = "com.dev.fido.bridge"
-    compileSdk = 34
+    // Target API 35 for modern AGP and AndroidX compatibility while preserving Android 14+ (API 34) runtime floor
+    compileSdk = 35
 
     // Enforce deterministic APK signing certificate so external credential providers
     // (e.g., Authnkey, Bitwarden) can reliably verify the app's SHA-256 fingerprint allowlist.
@@ -47,7 +48,7 @@ android {
     defaultConfig {
         applicationId = "com.dev.fido.bridge"
         minSdk = 34
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
 
@@ -86,15 +87,16 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
-    // Android 14 CredentialManager (Core API)
+    // Android 14+ CredentialManager (Core API)
     // Omit legacy credentials-play-services-auth dependency to prevent unwanted GMS permissions
-    implementation("androidx.credentials:credentials:1.3.0-alpha04")
+    implementation("androidx.credentials:credentials:1.3.0")
 
     // Coroutines & WebSockets
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Match Kotlin 2.x metadata format to prevent binary compatibility warnings during R8 shrinking
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
