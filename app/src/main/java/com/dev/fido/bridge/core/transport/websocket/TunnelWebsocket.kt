@@ -10,6 +10,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 
 class TunnelWebsocket(
@@ -17,7 +18,8 @@ class TunnelWebsocket(
     private val ephemeralTunnelId: ByteArray,
     private val onConnected: (ByteArray) -> Unit,
     private val onMessageReceived: (ByteArray) -> Unit,
-    private val onStatusUpdate: ((String) -> Unit)? = null
+    private val onStatusUpdate: ((String) -> Unit)? = null,
+    private val onDisconnected: (() -> Unit)? = null
 ) {
     companion object {
         // Share a single OkHttpClient instance across sessions to reuse connection pools and thread dispatchers.
@@ -91,6 +93,7 @@ class TunnelWebsocket(
                 val msg = "WebSocket Closed ($code)"
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
+                onDisconnected?.invoke()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -99,12 +102,14 @@ class TunnelWebsocket(
                 val msg = "WebSocket Error: $sanitizedError"
                 Log.e("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
+                onDisconnected?.invoke()
             }
         })
     }
 
     fun sendFrame(data: ByteArray) {
-        webSocket?.send(ByteString.of(*data))
+        // Convert ByteArray via Okio extension to avoid redundant array cloning from Kotlin's vararg spread operator
+        webSocket?.send(data.toByteString())
     }
 
     fun close() {

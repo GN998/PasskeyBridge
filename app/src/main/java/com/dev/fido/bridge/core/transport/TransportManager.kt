@@ -171,12 +171,14 @@ class TransportManager(
             onStatusUpdate = { status ->
                 if (tunnelWebsocket === sessionWs) {
                     onStatusUpdate?.invoke(status)
-                    // Stop BLE advertising and reset session guard when tunnel closes or fails
-                    if (status.startsWith("WebSocket Error") || status.startsWith("WebSocket Closed")) {
-                        bleAdvertiser.stopAdvertising()
-                        tunnelWebsocket = null
-                        onSessionTerminated?.invoke()
-                    }
+                }
+            },
+            onDisconnected = {
+                // Stop BLE advertising and reset session guard via explicit disconnect callback instead of log string matching
+                if (tunnelWebsocket === sessionWs) {
+                    bleAdvertiser.stopAdvertising()
+                    tunnelWebsocket = null
+                    onSessionTerminated?.invoke()
                 }
             }
         )

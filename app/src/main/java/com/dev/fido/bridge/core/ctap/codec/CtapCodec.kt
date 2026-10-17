@@ -249,6 +249,13 @@ object CtapCodec {
                 if (pos >= bytes.size) throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Unexpected end of CBOR stream")
                 return bytes[pos++].toInt() and 0xFF
             }
+            // Validate 64-bit unsigned CBOR length fits within a non-negative 32-bit JVM array/collection bound
+            fun requireIntLength(v: Long): Int {
+                if (v < 0L || v > Int.MAX_VALUE) {
+                    throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR item length overflow: $v")
+                }
+                return v.toInt()
+            }
             fun readBytes(len: Int): ByteArray {
                 if (pos + len > bytes.size) {
                     throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Invalid CBOR byte string length: $len")
@@ -312,32 +319,18 @@ object CtapCodec {
                 return when (majorType) {
                     0 -> value
                     1 -> -1L - value
-                    2 -> {
-                        if (value < 0L || value > Int.MAX_VALUE) {
-                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR byte string length overflow")
-                        }
-                        readBytes(value.toInt())
-                    }
-                    3 -> {
-                        if (value < 0L || value > Int.MAX_VALUE) {
-                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR text string length overflow")
-                        }
-                        String(readBytes(value.toInt()), Charsets.UTF_8)
-                    }
+                    2 -> readBytes(requireIntLength(value))
+                    3 -> String(readBytes(requireIntLength(value)), Charsets.UTF_8)
                     4 -> {
-                        if (value < 0L || value > Int.MAX_VALUE) {
-                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR array length overflow")
-                        }
+                        val len = requireIntLength(value)
                         val list = mutableListOf<Any?>()
-                        for (i in 0 until value.toInt()) list.add(readItem(depth + 1))
+                        for (i in 0 until len) list.add(readItem(depth + 1))
                         list
                     }
                     5 -> {
-                        if (value < 0L || value > Int.MAX_VALUE) {
-                            throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "CBOR map length overflow")
-                        }
+                        val len = requireIntLength(value)
                         val map = linkedMapOf<Any?, Any?>()
-                        for (i in 0 until value.toInt()) {
+                        for (i in 0 until len) {
                             val k = readItem(depth + 1)
                             // Reject duplicate map keys per CTAP 2.3 §8 canonical CBOR decoding rules
                             if (map.containsKey(k)) {

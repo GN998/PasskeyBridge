@@ -9,7 +9,7 @@ class NoiseSession {
 
     private var noiseState: NoiseHandshakeState? = null
     private var crypter: NoiseCrypter? = null
-    private var peerPublicKeyBytes: ByteArray? = null
+    private lateinit var peerPublicKeyBytes: ByteArray
 
     // Inject the PC's public key (scanned from QR)
     @Synchronized
@@ -20,7 +20,7 @@ class NoiseSession {
     // Step 1: Initialize the noise state machine with derived PSK
     @Synchronized
     fun initializeHandshake(psk: ByteArray) {
-        val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
+        check(::peerPublicKeyBytes.isInitialized) { "Peer public key not set" }
         // Reset handshake flag and session crypter so subsequent QR scans on a singleTop Activity
         // process the new ClientHello instead of treating it as post-handshake ciphertext.
         isHandshakeComplete = false
@@ -30,7 +30,7 @@ class NoiseSession {
         noiseState = nh
 
         nh.mixHash(byteArrayOf(1))
-        nh.mixHash(peerKey)
+        nh.mixHash(peerPublicKeyBytes)
         nh.mixKeyAndHash(psk)
         Log.d("NoiseSession", "Noise KNpsk0 initialized with derived PSK, waiting for ClientHello")
     }
@@ -38,8 +38,8 @@ class NoiseSession {
     // Step 2: Process the incoming ClientHello and generate ServerHello
     @Synchronized
     fun processClientHelloAndGenerateServerHello(clientHello: ByteArray): ByteArray {
-        val nh = noiseState ?: throw IllegalStateException("Handshake not initialized")
-        val peerKey = peerPublicKeyBytes ?: throw IllegalStateException("Peer public key not set")
+        // Verify noiseState initialization, which inherently guarantees peerPublicKeyBytes is also initialized
+        val nh = checkNotNull(noiseState) { "Handshake not initialized" }
 
         if (clientHello.size < 81) {
             throw IllegalArgumentException("ClientHello message too short: ${clientHello.size} bytes")
@@ -65,7 +65,7 @@ class NoiseSession {
         val peDh = CryptoHelper.recd(ephPriv, pcEphemeralPubKey)
         nh.mixKey(peDh)
 
-        val psDh = CryptoHelper.recd(ephPriv, peerKey)
+        val psDh = CryptoHelper.recd(ephPriv, peerPublicKeyBytes)
         nh.mixKey(psDh)
 
         val serverHelloPayload = nh.encryptAndHash(ByteArray(0))
