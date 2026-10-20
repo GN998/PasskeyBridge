@@ -30,7 +30,7 @@ object HybridQrParser {
 
             // Extract optional epoch seconds (Key 3), state-assisted capability flag (Key 4), and flow hint (Key 5) per CTAP 2.3 §11.5.1.1
             val timestampSeconds = (cborMap[3L] as? Long)?.takeIf { it > 0L }
-            val supportsStateAssisted = (cborMap[4L] as? Boolean) ?: false
+            val supportsStateAssisted = (cborMap[4L] as? Boolean) ?: true
             val operationHint = when (val rawHint = cborMap[5L]) {
                 is String -> rawHint
                 is ByteArray -> String(rawHint, Charsets.UTF_8)
