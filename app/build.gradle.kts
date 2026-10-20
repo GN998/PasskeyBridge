@@ -19,6 +19,11 @@ val rawTunnelId = System.getenv("CUSTOM_TUNNEL_ID")?.takeIf { it.isNotBlank() }
 val tunnelId = rawTunnelId.toIntOrNull()
     ?: throw GradleException("Build failed: TUNNEL_ID must be a valid integer.")
 
+// Resolve optional build-time VAPID public key fallback so devices can subscribe to Sunup without an extra HTTP round-trip
+val defaultVapidPublicKey = System.getenv("VAPID_PUBLIC_KEY")?.takeIf { it.isNotBlank() }
+    ?: localProperties.getProperty("VAPID_PUBLIC_KEY")?.takeIf { it.isNotBlank() }
+    ?: ""
+
 println("--> [Gradle Build Config] Successfully resolved TUNNEL_ID: $tunnelId")
 
 android {
@@ -54,6 +59,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("int", "TUNNEL_ID", "$tunnelId")
+        buildConfigField("String", "DEFAULT_VAPID_PUBLIC_KEY", "\"$defaultVapidPublicKey\"")
     }
 
     buildTypes {
@@ -98,4 +104,7 @@ dependencies {
     // Match Kotlin 2.x metadata format to prevent binary compatibility warnings during R8 shrinking
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // UnifiedPush connector for registering and receiving state-assisted wakeup broadcasts via Sunup / Mozilla Autopush
+    implementation("org.unifiedpush.android:connector:3.0.4")
 }
