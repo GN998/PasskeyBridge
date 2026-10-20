@@ -66,6 +66,8 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           # Inject VAPID public key from repository Secrets or Variables for state-assisted Sunup push registration
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY || vars.VAPID_PUBLIC_KEY }}
+          # Inject bearer token secret to authenticate state-assisted push endpoint registration
+          REGISTRATION_SECRET: ${{ secrets.REGISTRATION_SECRET }}
         run: |
           gradle assembleRelease --stacktrace --parallel --build-cache --no-daemon
           mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/passkey-bridge-${SHORT_SHA}.apk"
