@@ -2,6 +2,7 @@ package com.dev.fido.bridge.core.transport.websocket
 
 import android.util.Log
 import com.dev.fido.bridge.core.security.DomainDerivation
+import com.dev.fido.bridge.core.security.LinkStore
 import com.dev.fido.bridge.core.security.hexToByteArray
 import com.dev.fido.bridge.core.security.toHex
 import okhttp3.OkHttpClient
@@ -19,7 +20,11 @@ class TunnelWebsocket(
     private val onConnected: (ByteArray) -> Unit,
     private val onMessageReceived: (ByteArray) -> Unit,
     private val onStatusUpdate: ((String) -> Unit)? = null,
-    private val onDisconnected: (() -> Unit)? = null
+    private val onDisconnected: (() -> Unit)? = null,
+    // Route to /cable/contact/<contact_id> when non-null for state-assisted transactions per CTAP 2.3 §11.5.2
+    private val contactId: String? = null,
+    // Deliver X-caBLE-Client-Payload header from 101 Switching Protocols response when waking via contact tunnel
+    private val onClientPayloadReceived: ((String?) -> Unit)? = null
 ) {
     companion object {
         // Share a single OkHttpClient instance across sessions to reuse connection pools and thread dispatchers.
@@ -37,9 +42,12 @@ class TunnelWebsocket(
 
     fun connect() {
         val domain = DomainDerivation.deriveDomainForTunnelId(domainId)
-        val tunnelIdHex = ephemeralTunnelId.toHex()
-
-        val url = "wss://$domain/cable/new/$tunnelIdHex"
+        val url = if (!contactId.isNullOrEmpty()) {
+            "wss://$domain/cable/contact/$contactId"
+        } else {
+            val tunnelIdHex = ephemeralTunnelId.toHex()
+            "wss://$domain/cable/new/$tunnelIdHex"
+        }
 
         val request = Request.Builder()
             .url(url)
@@ -58,6 +66,14 @@ class TunnelWebsocket(
                 val msg = "WebSocket Tunnel Connected!"
                 Log.d("TunnelWebsocket", msg)
                 onStatusUpdate?.invoke(msg)
+
+                if (!contactId.isNullOrEmpty()) {
+                    // Forward cached client payload header from cable-tunnel-server to derive BLE EID and NKpsk0 keys
+                    val clientPayloadHex = response.header("X-caBLE-Client-Payload")?.trim()
+                    onClientPayloadReceived?.invoke(clientPayloadHex)
+                    onConnected(ByteArray(3))
+                    return
+                }
 
                 // Extract 3-byte Routing ID from HTTP response header "X-Cable-Routing-Id"
                 val routingIdHeader = response.header("X-Cable-Routing-Id")
@@ -99,6 +115,11 @@ class TunnelWebsocket(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                // Rotate local Contact ID if the tunnel server reports HTTP 410 Gone on a tombstoned contact room
+                if (response?.code == 410 && !contactId.isNullOrEmpty()) {
+                    Log.w("TunnelWebsocket", "Contact tunnel returned HTTP 410 Gone; rotating local Contact ID")
+                    LinkStore.rotateContactIdentity()
+                }
                 // Redact derived hostname from network exception messages (e.g., DNS resolution failures)
                 val sanitizedError = t.message?.replace(domain, "***", ignoreCase = true) ?: "Connection failed"
                 val msg = "WebSocket Error: $sanitizedError"

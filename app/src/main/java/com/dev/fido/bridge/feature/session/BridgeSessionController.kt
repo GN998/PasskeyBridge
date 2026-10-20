@@ -29,36 +29,65 @@ class BridgeSessionController(
     fun onQrCodeScanned(
         peerPublicKey: ByteArray,
         psk: ByteArray,
+        domainId: Int,
+        supportsStateAssisted: Boolean = false
+    ) {
+        bindCallbacks()
+        transportManager.startSession(
+            peerPublicKey = peerPublicKey,
+            psk = psk,
+            domainId = domainId,
+            supportsStateAssisted = supportsStateAssisted,
+            onRequestReceived = ::dispatchCtapRequest
+        )
+    }
+
+    /**
+     * Initiate a state-assisted (QR-less) session when woken by a WebPush notification from cable-tunnel-server.
+     */
+    fun onStateAssistedWakeup(
+        contactId: String,
+        clientPayloadHex: String?,
         domainId: Int
     ) {
+        bindCallbacks()
+        transportManager.startStateAssistedSession(
+            contactId = contactId,
+            initialClientPayloadHex = clientPayloadHex,
+            domainId = domainId,
+            onRequestReceived = ::dispatchCtapRequest
+        )
+    }
+
+    private fun bindCallbacks() {
         transportManager.onStatusUpdate = { status ->
             scope.launch { onStatusUpdate?.invoke(status) }
         }
         transportManager.onSessionTerminated = {
             scope.launch { onSessionTerminated?.invoke() }
         }
+    }
 
-        transportManager.startSession(peerPublicKey, psk, domainId) { rawCtapRequest ->
-            try {
-                val parsedRequest = CtapCodec.decodeRequest(rawCtapRequest)
+    private suspend fun dispatchCtapRequest(rawCtapRequest: ByteArray): ByteArray {
+        return try {
+            val parsedRequest = CtapCodec.decodeRequest(rawCtapRequest)
 
-                // Switch to Main dispatcher non-blockingly for Android CredentialManager UI interaction
-                val response = withContext(Dispatchers.Main) {
-                    proxy.handleCtapRequest(parsedRequest)
-                }
-
-                CtapCodec.encodeResponse(response)
-            } catch (e: CancellationException) {
-                // Rethrow cancellation exceptions to respect structured concurrency lifecycles
-                throw e
-            } catch (e: CtapCodecException) {
-                // Preserve specific CTAP status code (e.g., ERR_INVALID_COMMAND vs ERR_INVALID_CBOR)
-                Log.e("SessionController", "CTAP codec exception: 0x${"%02X".format(e.statusCode)}", e)
-                byteArrayOf(e.statusCode)
-            } catch (e: Exception) {
-                Log.e("SessionController", "Unhandled exception during CTAP processing", e)
-                byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
+            // Switch to Main dispatcher non-blockingly for Android CredentialManager UI interaction
+            val response = withContext(Dispatchers.Main) {
+                proxy.handleCtapRequest(parsedRequest)
             }
+
+            CtapCodec.encodeResponse(response)
+        } catch (e: CancellationException) {
+            // Rethrow cancellation exceptions to respect structured concurrency lifecycles
+            throw e
+        } catch (e: CtapCodecException) {
+            // Preserve specific CTAP status code (e.g., ERR_INVALID_COMMAND vs ERR_INVALID_CBOR)
+            Log.e("SessionController", "CTAP codec exception: 0x${"%02X".format(e.statusCode)}", e)
+            byteArrayOf(e.statusCode)
+        } catch (e: Exception) {
+            Log.e("SessionController", "Unhandled exception during CTAP processing", e)
+            byteArrayOf(CtapStatus.ERR_OPERATION_DENIED)
         }
     }
 

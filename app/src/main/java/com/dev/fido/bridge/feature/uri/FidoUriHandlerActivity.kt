@@ -12,6 +12,7 @@ import android.text.InputType
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -22,11 +23,17 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.lifecycleScope
 import com.dev.fido.bridge.core.hybrid.HybridQrParser
+import com.dev.fido.bridge.core.security.LinkStore
 import com.dev.fido.bridge.core.security.TunnelConfigManager
 import com.dev.fido.bridge.core.transport.TransportManager
 import com.dev.fido.bridge.core.transport.ble.HybridBleAdvertiser
+import com.dev.fido.bridge.core.transport.push.TunnelRegistrationClient
+import com.dev.fido.bridge.feature.push.CableWakeupService
 import com.dev.fido.bridge.feature.session.BridgeSessionController
+import kotlinx.coroutines.launch
+import org.unifiedpush.android.connector.UnifiedPush
 
 class FidoUriHandlerActivity : AppCompatActivity() {
 
@@ -65,7 +72,30 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
         setContentView(tv)
 
+        CableWakeupService.onPushRegistrationStatusChanged = { _, message ->
+            runOnUiThread {
+                tv.append("\n➜ $message")
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
+        }
+
         checkAndRequestPermissions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Intercept incoming state-assisted wakeups directly when the Activity is already in the foreground
+        CableWakeupService.onForegroundWakeupIntercepted = { contactId, payloadHex ->
+            runOnUiThread {
+                startStateAssistedFlow(contactId, payloadHex)
+            }
+            true
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        CableWakeupService.onForegroundWakeupIntercepted = null
     }
 
     // Mount settings trigger directly inside the native ActionBar so it aligns with the app title and avoids status bar overlap
@@ -85,11 +115,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     }
 
     /**
-     * Present dialog to configure or clear custom tunnel domain ID.
+     * Present dialog to configure custom tunnel domain ID and manage Sunup (UnifiedPush) QR-less registration.
      * Apply changes on subsequent scans to avoid invalidating active BLE EID and Noise PSK state mid-handshake.
      */
     private fun showTunnelSettingsDialog() {
         val customId = TunnelConfigManager.getCustomTunnelId()
+        val isPushActive = LinkStore.isPushRegistered()
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -98,7 +129,9 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
         val statusView = TextView(this).apply {
             // Conceal build-time default ID to prevent reverse-deriving the default tunnel domain
-            text = if (customId != null) "Custom configuration active" else "Currently using default configuration"
+            val domainState = if (customId != null) "Custom configuration active" else "Currently using default configuration"
+            val pushState = if (isPushActive) "QR-less Push: Registered (Sunup)" else "QR-less Push: Not registered"
+            text = "$domainState\n$pushState"
             textSize = 14f
             setPadding(0, 0, 0, 20)
         }
@@ -106,15 +139,29 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         val inputField = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
             filters = arrayOf(InputFilter.LengthFilter(5))
-            hint = "256 - 65535"
+            hint = "Tunnel ID (256 - 65535)"
             if (customId != null) {
                 setText(customId.toString())
                 setSelection(text.length)
             }
         }
 
+        val secretInputField = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "Registration Secret (Bearer Token)"
+            LinkStore.getRegistrationSecret()?.let {
+                setText(it)
+            }
+        }
+
+        val pushActionButton = Button(this).apply {
+            text = if (isPushActive) "Unlink & Disable QR-less Push" else "Enable QR-less Push (Sunup)"
+        }
+
         container.addView(statusView)
         container.addView(inputField)
+        container.addView(secretInputField)
+        container.addView(pushActionButton)
 
         val dialog = AlertDialog.Builder(this)
             .setTitle("Extended Domain Settings")
@@ -127,10 +174,27 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             .setNegativeButton("Cancel", null)
             .create()
 
+        pushActionButton.setOnClickListener {
+            LinkStore.setRegistrationSecret(secretInputField.text.toString())
+            dialog.dismiss()
+            if (isPushActive) {
+                unlinkStateAssistedPush()
+            } else {
+                registerStateAssistedPush()
+            }
+        }
+
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = (customId != null)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val parsed = inputField.text.toString().trim().toIntOrNull()
+                LinkStore.setRegistrationSecret(secretInputField.text.toString())
+                val rawText = inputField.text.toString().trim()
+                if (rawText.isEmpty()) {
+                    Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
+                    dialog.dismiss()
+                    return@setOnClickListener
+                }
+                val parsed = rawText.toIntOrNull()
                 if (parsed == null || !TunnelConfigManager.isValidTunnelId(parsed)) {
                     inputField.error = "Enter a number between 256 and 65535"
                 } else {
@@ -144,11 +208,61 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /**
+     * Fetch the VAPID public key from cable-tunnel-server (if not cached) and subscribe via UnifiedPush (Sunup).
+     */
+    private fun registerStateAssistedPush() {
+        tv.append("\n➜ Registering QR-less push with Sunup...")
+        lifecycleScope.launch {
+            val vapidKey = LinkStore.getVapidPublicKey()?.takeIf { it.isNotBlank() }
+                ?: TunnelRegistrationClient.fetchVapidPublicKey().getOrElse { err ->
+                    tv.append("\n➜ Failed to fetch VAPID key: ${err.message}")
+                    Toast.makeText(this@FidoUriHandlerActivity, "VAPID fetch failed: ${err.message}", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+
+            try {
+                val instanceId = LinkStore.getContactIdString()
+                UnifiedPush.registerAppWithDialog(
+                    context = this@FidoUriHandlerActivity,
+                    instance = instanceId,
+                    vapid = vapidKey
+                )
+            } catch (e: Exception) {
+                Log.e("FidoUriHandler", "UnifiedPush registration call failed", e)
+                tv.append("\n➜ Sunup registration error: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Unregister from UnifiedPush and send DELETE `/cable/register/<contact_id>` so linked desktops receive HTTP 410 Gone.
+     */
+    private fun unlinkStateAssistedPush() {
+        val currentContactId = LinkStore.getContactIdString()
+        tv.append("\n➜ Unlinking QR-less push subscription...")
+        lifecycleScope.launch {
+            try {
+                UnifiedPush.unregisterApp(this@FidoUriHandlerActivity, currentContactId)
+            } catch (e: Exception) {
+                Log.w("FidoUriHandler", "UnifiedPush unregister warning", e)
+            }
+            val res = TunnelRegistrationClient.unregisterPushSubscription(currentContactId)
+            if (res.isSuccess) {
+                tv.append("\n➜ QR-less push unlinked and Contact ID rotated.")
+                Toast.makeText(this@FidoUriHandlerActivity, "Unlinked successfully", Toast.LENGTH_SHORT).show()
+            } else {
+                tv.append("\n➜ Unlink error: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
     private fun checkAndRequestPermissions() {
-        // Request only BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT on Android 14+ without legacy location permissions
+        // Request BLUETOOTH_ADVERTISE, BLUETOOTH_CONNECT, and POST_NOTIFICATIONS on Android 14+ without legacy location permissions
         val permissions = listOf(
             Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.BLUETOOTH_CONNECT
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.POST_NOTIFICATIONS
         )
 
         val missingPermissions = permissions.filter {
@@ -166,7 +280,9 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            val btAdvertiseGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+            val btConnectGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+            if (btAdvertiseGranted && btConnectGranted) {
                 initializeController()
                 handleIntent(intent)
             } else {
@@ -209,6 +325,16 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             return
         }
 
+        // 1. Check if launched from a state-assisted WebPush wakeup notification
+        val wakeupContactId = intent?.getStringExtra(CableWakeupService.EXTRA_CONTACT_ID)
+        if (!wakeupContactId.isNullOrEmpty()) {
+            val payloadHex = intent.getStringExtra(CableWakeupService.EXTRA_CLIENT_PAYLOAD_HEX)
+            intent.removeExtra(CableWakeupService.EXTRA_CONTACT_ID)
+            CableWakeupService.stopWakeup(this)
+            startStateAssistedFlow(wakeupContactId, payloadHex)
+            return
+        }
+
         val uriString = intent?.dataString
 
         if (uriString != null) {
@@ -241,7 +367,8 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                     sessionController.onQrCodeScanned(
                         qrData.publicKey,
                         qrData.secret,
-                        qrData.tunnelServerId
+                        qrData.tunnelServerId,
+                        qrData.supportsStateAssisted
                     )
                     tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
                 } catch (e: Exception) {
@@ -254,12 +381,37 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                 tv.append("\n\nInvalid or unsupported FIDO URI.")
             }
         } else if (activeFidoUri == null) {
-            tv.text = "No URI provided. Waiting for FIDO URI intent.\nMake sure you scan a valid FIDO QR code."
+            val pushReady = if (LinkStore.isPushRegistered()) "Active (Sunup)" else "Inactive (Configure in ⚙)"
+            tv.text = "No URI provided. Waiting for FIDO URI intent or QR-less push.\n➜ QR-less Push Status: $pushReady"
+        }
+    }
+
+    private fun startStateAssistedFlow(contactId: String, clientPayloadHex: String?) {
+        val guardKey = "contact:$contactId:${clientPayloadHex.orEmpty()}"
+        if (activeFidoUri == guardKey) {
+            Log.d("FidoUriHandler", "Ignoring duplicate state-assisted wakeup intent")
+            return
+        }
+        activeFidoUri = guardKey
+
+        tv.text = "State-Assisted Wakeup Received.\nConnecting to contact tunnel & advertising BLE EID..."
+        try {
+            sessionController.onStateAssistedWakeup(
+                contactId = contactId,
+                clientPayloadHex = clientPayloadHex,
+                domainId = TunnelConfigManager.getEffectiveTunnelId()
+            )
+        } catch (e: Exception) {
+            activeFidoUri = null
+            Log.e("FidoUriHandler", "Error starting state-assisted session", e)
+            tv.append("\n\nError: ${e.message}")
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        CableWakeupService.onPushRegistrationStatusChanged = null
+        CableWakeupService.onForegroundWakeupIntercepted = null
         activeFidoUri = null
         // Ensure active BLE advertising and WebSocket connections are terminated when Activity exits
         if (::sessionController.isInitialized) {
