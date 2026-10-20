@@ -146,21 +146,12 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             }
         }
 
-        val secretInputField = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            hint = "Registration Secret (Bearer Token)"
-            LinkStore.getRegistrationSecret()?.let {
-                setText(it)
-            }
-        }
-
         val pushActionButton = Button(this).apply {
             text = if (isPushActive) "Unlink & Disable QR-less Push" else "Enable QR-less Push (Sunup)"
         }
 
         container.addView(statusView)
         container.addView(inputField)
-        container.addView(secretInputField)
         container.addView(pushActionButton)
 
         val dialog = AlertDialog.Builder(this)
@@ -175,7 +166,6 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             .create()
 
         pushActionButton.setOnClickListener {
-            LinkStore.setRegistrationSecret(secretInputField.text.toString())
             dialog.dismiss()
             if (isPushActive) {
                 unlinkStateAssistedPush()
@@ -187,10 +177,8 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = (customId != null)
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                LinkStore.setRegistrationSecret(secretInputField.text.toString())
                 val rawText = inputField.text.toString().trim()
                 if (rawText.isEmpty()) {
-                    Toast.makeText(this, "Settings saved", Toast.LENGTH_SHORT).show()
                     dialog.dismiss()
                     return@setOnClickListener
                 }

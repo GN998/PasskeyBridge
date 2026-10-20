@@ -1,6 +1,7 @@
 package com.dev.fido.bridge.core.transport.push
 
 import android.util.Log
+import com.dev.fido.bridge.BuildConfig
 import com.dev.fido.bridge.core.security.DomainDerivation
 import com.dev.fido.bridge.core.security.LinkStore
 import com.dev.fido.bridge.core.security.TunnelConfigManager
@@ -80,8 +81,9 @@ object TunnelRegistrationClient {
                 .url(url)
                 .post(payloadJson.toRequestBody(JSON_MEDIA_TYPE))
 
-            LinkStore.getRegistrationSecret()?.takeIf { it.isNotEmpty() }?.let { secret ->
-                reqBuilder.header("Authorization", "Bearer $secret")
+            // Authenticate registration requests using build-time injected secret to prevent unauthorized push binding
+            if (BuildConfig.REGISTRATION_SECRET.isNotEmpty()) {
+                reqBuilder.header("Authorization", "Bearer ${BuildConfig.REGISTRATION_SECRET}")
             }
 
             httpClient.newCall(reqBuilder.build()).execute().use { response ->
@@ -104,8 +106,9 @@ object TunnelRegistrationClient {
                 .url(url)
                 .delete()
 
-            LinkStore.getRegistrationSecret()?.takeIf { it.isNotEmpty() }?.let { secret ->
-                reqBuilder.header("Authorization", "Bearer $secret")
+            // Authenticate unlinking requests using build-time injected secret
+            if (BuildConfig.REGISTRATION_SECRET.isNotEmpty()) {
+                reqBuilder.header("Authorization", "Bearer ${BuildConfig.REGISTRATION_SECRET}")
             }
 
             httpClient.newCall(reqBuilder.build()).execute().use { response ->

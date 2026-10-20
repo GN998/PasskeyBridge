@@ -24,6 +24,11 @@ val defaultVapidPublicKey = System.getenv("VAPID_PUBLIC_KEY")?.takeIf { it.isNot
     ?: localProperties.getProperty("VAPID_PUBLIC_KEY")?.takeIf { it.isNotBlank() }
     ?: ""
 
+// Inject registration bearer secret at build time to authenticate state-assisted push endpoints without manual user input
+val registrationSecret = System.getenv("REGISTRATION_SECRET")?.takeIf { it.isNotBlank() }
+    ?: localProperties.getProperty("REGISTRATION_SECRET")?.takeIf { it.isNotBlank() }
+    ?: ""
+
 println("--> [Gradle Build Config] Successfully resolved TUNNEL_ID: $tunnelId")
 
 android {
@@ -60,6 +65,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("int", "TUNNEL_ID", "$tunnelId")
         buildConfigField("String", "DEFAULT_VAPID_PUBLIC_KEY", "\"$defaultVapidPublicKey\"")
+        buildConfigField("String", "REGISTRATION_SECRET", "\"$registrationSecret\"")
     }
 
     buildTypes {

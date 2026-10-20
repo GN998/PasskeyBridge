@@ -45,7 +45,6 @@ object LinkStore {
     private const val KEY_WEBPUSH_PUB_B64 = "enc_webpush_pub"
     private const val KEY_WEBPUSH_PRIV_SCALAR = "enc_webpush_priv"
     private const val KEY_WEBPUSH_AUTH_B64 = "enc_webpush_auth"
-    private const val KEY_REGISTRATION_SECRET = "enc_reg_secret"
     private const val KEY_VAPID_PUBLIC_KEY = "vapid_public_key"
     private const val KEY_PUSH_REGISTERED = "push_registered"
     private const val KEY_PUSH_ENDPOINT = "enc_push_endpoint"
@@ -155,17 +154,6 @@ object LinkStore {
 
     fun getWebPushAuthSecretBytes(): ByteArray =
         CryptoUtils.decodeBase64Url(getWebPushAuthSecretB64())
-
-    fun setRegistrationSecret(secret: String?) {
-        if (secret.isNullOrBlank()) {
-            prefs.edit().remove(KEY_REGISTRATION_SECRET).apply()
-        } else {
-            putEncryptedBytes(KEY_REGISTRATION_SECRET, secret.trim().toByteArray(Charsets.UTF_8))
-        }
-    }
-
-    fun getRegistrationSecret(): String? =
-        getDecryptedBytes(KEY_REGISTRATION_SECRET)?.let { String(it, Charsets.UTF_8) }
 
     fun setVapidPublicKey(vapidKey: String) {
         prefs.edit().putString(KEY_VAPID_PUBLIC_KEY, vapidKey.trim()).apply()
