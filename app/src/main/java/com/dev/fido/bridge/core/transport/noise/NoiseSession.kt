@@ -8,11 +8,18 @@ class NoiseSession {
     var isHandshakeComplete = false
         private set
 
+    @Volatile
+    var handshakeHash: ByteArray = ByteArray(0)
+        private set
+
     private var noiseState: NoiseHandshakeState? = null
     private var crypter: NoiseCrypter? = null
     private lateinit var peerPublicKeyBytes: ByteArray
     private lateinit var ephPriv: ECPrivateKey
     private lateinit var phoneEphemeralPubKey: ByteArray
+
+    private var isStateAssistedMode: Boolean = false
+    private var localStaticPrivKey: ECPrivateKey? = null
 
     // Inject the PC's public key (scanned from QR)
     @Synchronized
@@ -27,9 +34,12 @@ class NoiseSession {
         // Reset handshake flag and session crypter so subsequent QR scans on a singleTop Activity
         // process the new ClientHello instead of treating it as post-handshake ciphertext.
         isHandshakeComplete = false
+        handshakeHash = ByteArray(0)
         crypter = null
+        isStateAssistedMode = false
+        localStaticPrivKey = null
 
-        val nh = NoiseHandshakeState()
+        val nh = NoiseHandshakeState(isNkPsk0 = false)
         noiseState = nh
 
         nh.mixHash(byteArrayOf(1))
@@ -42,6 +52,39 @@ class NoiseSession {
         phoneEphemeralPubKey = CryptoHelper.uncompressECKey(pub)
 
         Log.d("NoiseSession", "Noise KNpsk0 initialized with derived PSK, waiting for ClientHello")
+    }
+
+    /**
+     * Initialize the Noise NKpsk0 state machine for state-assisted (QR-less) transactions per CTAP 2.3 §11.5.2 and PXP §6.2.
+     */
+    @Synchronized
+    fun initializeStateAssistedHandshake(
+        psk: ByteArray,
+        localStaticPubKeyBytes: ByteArray,
+        localStaticPrivateKey: ECPrivateKey
+    ) {
+        require(localStaticPubKeyBytes.size == 65 && localStaticPubKeyBytes[0] == 0x04.toByte()) {
+            "Authenticator static public key must be a 65-byte uncompressed P-256 point"
+        }
+        isHandshakeComplete = false
+        handshakeHash = ByteArray(0)
+        crypter = null
+        isStateAssistedMode = true
+        localStaticPrivKey = localStaticPrivateKey
+
+        val nh = NoiseHandshakeState(isNkPsk0 = true)
+        noiseState = nh
+
+        // Mix 1-byte zero prologue and the authenticator's static public key per PXP §6.2 initialHandshakeMessage
+        nh.mixHash(byteArrayOf(0))
+        nh.mixHash(localStaticPubKeyBytes)
+        nh.mixKeyAndHash(psk)
+
+        val (pub, priv) = CryptoHelper.generateEcKeyPair()
+        ephPriv = priv
+        phoneEphemeralPubKey = CryptoHelper.uncompressECKey(pub)
+
+        Log.d("NoiseSession", "Noise NKpsk0 initialized with derived PSK, waiting for ClientHello")
     }
 
     // Step 2: Process the incoming ClientHello and generate ServerHello
@@ -59,6 +102,14 @@ class NoiseSession {
 
         nh.mixHash(pcEphemeralPubKey)
         nh.mixKey(pcEphemeralPubKey)
+
+        // In NKpsk0 (state-assisted), the initiator mixes es (ECDH of initiator ephemeral and responder static) before encrypting ClientHello
+        if (isStateAssistedMode) {
+            val staticPriv = checkNotNull(localStaticPrivKey) { "Authenticator static private key not initialized" }
+            val esDh = CryptoHelper.recd(staticPriv, pcEphemeralPubKey)
+            nh.mixKey(esDh)
+        }
+
         val plaintext = nh.decryptAndHash(clientHelloPayload)
         // Reject non-empty ClientHello plaintext per CTAP 2.3 §11.5.1.2 handshake verification rules
         if (plaintext.isNotEmpty()) {
@@ -71,13 +122,17 @@ class NoiseSession {
         val peDh = CryptoHelper.recd(ephPriv, pcEphemeralPubKey)
         nh.mixKey(peDh)
 
-        val psDh = CryptoHelper.recd(ephPriv, peerPublicKeyBytes)
-        nh.mixKey(psDh)
+        // In KNpsk0 (QR-initiated), the responder mixes se (ECDH of responder ephemeral and initiator QR static) before encrypting ServerHello
+        if (!isStateAssistedMode) {
+            val psDh = CryptoHelper.recd(ephPriv, peerPublicKeyBytes)
+            nh.mixKey(psDh)
+        }
 
         val serverHelloPayload = nh.encryptAndHash(ByteArray(0))
         val serverHello = phoneEphemeralPubKey + serverHelloPayload
 
         val (rx, tx) = nh.splitSessionKeys()
+        handshakeHash = nh.currentHandshakeHash()
         crypter = NoiseCrypter(rx, tx)
         isHandshakeComplete = true
 

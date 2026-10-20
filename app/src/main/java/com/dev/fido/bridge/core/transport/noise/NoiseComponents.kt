@@ -108,6 +108,16 @@ object CryptoHelper {
         return seed
     }
 
+    /**
+     * Generate a 16-byte state-assisted BLE advertisement plaintext containing a zero flags byte and 15 bytes of random nonce per CTAP 2.3 §11.5.2.
+     */
+    fun generateStateAssistedSeed(): ByteArray {
+        return ByteArray(16).also {
+            secureRandom.nextBytes(it)
+            it[0] = 0x00 // Flags byte must be zero per PXP §5.3.2
+        }
+    }
+
     // Generate standard 20-byte EID for caBLE v2 given derived 64-byte eidKey and 16-byte seed
     fun generateEid(eidKey: ByteArray, seed: ByteArray): ByteArray {
         val aesKey = eidKey.copyOfRange(0, 32)
@@ -192,11 +202,18 @@ object CryptoHelper {
     }
 }
 
-class NoiseHandshakeState {
-    // Initialize 32-byte Noise protocol name buffer for QR-initiated KNpsk0 handshakes per CTAP 2.3 §11.5.1.2
-    private var handshakeHash: ByteArray = "Noise_KNpsk0_P256_AESGCM_SHA256".toByteArray(Charsets.US_ASCII).copyOf(32)
+class NoiseHandshakeState(isNkPsk0: Boolean = false) {
+    // Initialize 32-byte Noise protocol name buffer for QR-initiated KNpsk0 or state-assisted NKpsk0 handshakes per CTAP 2.3 §11.5
+    private var handshakeHash: ByteArray = (
+        if (isNkPsk0) "Noise_NKpsk0_P256_AESGCM_SHA256" else "Noise_KNpsk0_P256_AESGCM_SHA256"
+    ).toByteArray(Charsets.US_ASCII).copyOf(32)
     private var chainingKey: ByteArray = handshakeHash.copyOf()
     private var cipherKey: ByteArray? = null
+
+    /**
+     * Return a defensive copy of the current Noise handshake transcript hash for channel binding signatures per PXP §6.2.
+     */
+    fun currentHandshakeHash(): ByteArray = handshakeHash.copyOf()
 
     fun mixHash(data: ByteArray) {
         handshakeHash = MessageDigest.getInstance("SHA-256").run {
