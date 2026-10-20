@@ -294,8 +294,9 @@ class TransportManager(
                 Log.d("TransportManager", msg)
                 onStatusUpdate?.invoke(msg)
 
-                // Send typeUpdate (0x02) linking frame after post-handshake if the QR peer supports state-assisted transactions
-                if (uncompressedQrPeerKey != null && LinkStore.isPushRegistered()) {
+                // Send typeUpdate (0x02) linking frame after post-handshake whenever the QR peer supports state-assisted transactions.
+                // Decouple desktop linking from current push registration state so the client platform always persists the Contact ID.
+                if (uncompressedQrPeerKey != null) {
                     try {
                         val updateFrame = LinkStore.createLinkAndBuildUpdateFrame(
                             qrPeerUncompressedPubKey = uncompressedQrPeerKey,
