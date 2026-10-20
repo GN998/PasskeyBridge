@@ -66,7 +66,7 @@ object TunnelRegistrationClient {
         p256dhB64: String = LinkStore.getWebPushPublicKeyB64(),
         authB64: String = LinkStore.getWebPushAuthSecretB64()
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatching<Unit> {
             val url = "${resolveBaseHttpsUrl()}/cable/register/$contactId"
             val payloadJson = JSONObject().apply {
                 put("endpoint", endpoint)
@@ -98,7 +98,7 @@ object TunnelRegistrationClient {
      * Permanently tombstone the Contact ID on the tunnel server (`DELETE /cable/register/<contact_id>`) so desktop clients receive HTTP 410 Gone.
      */
     suspend fun unregisterPushSubscription(contactId: String): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatching<Unit> {
             val url = "${resolveBaseHttpsUrl()}/cable/register/$contactId"
             val reqBuilder = Request.Builder()
                 .url(url)

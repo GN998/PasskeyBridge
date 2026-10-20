@@ -209,7 +209,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     }
 
     /**
-     * Fetch the VAPID public key from cable-tunnel-server (if not cached) and subscribe via UnifiedPush (Sunup).
+     * Fetch the VAPID public key from cable-tunnel-server (if not cached) and subscribe via UnifiedPush 3.x API (Sunup).
      */
     private fun registerStateAssistedPush() {
         tv.append("\n➜ Registering QR-less push with Sunup...")
@@ -222,12 +222,35 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                 }
 
             try {
+                val distributors = UnifiedPush.getDistributors(this@FidoUriHandlerActivity)
+                if (distributors.isEmpty()) {
+                    tv.append("\n➜ No UnifiedPush distributor found. Please ensure Sunup is installed.")
+                    Toast.makeText(this@FidoUriHandlerActivity, "Sunup not found on device", Toast.LENGTH_LONG).show()
+                    return@launch
+                }
+
                 val instanceId = LinkStore.getContactIdString()
-                UnifiedPush.registerAppWithDialog(
-                    context = this@FidoUriHandlerActivity,
-                    instance = instanceId,
-                    vapid = vapidKey
-                )
+                if (distributors.size == 1) {
+                    UnifiedPush.saveDistributor(this@FidoUriHandlerActivity, distributors.first())
+                    UnifiedPush.register(
+                        context = this@FidoUriHandlerActivity,
+                        instance = instanceId,
+                        vapid = vapidKey
+                    )
+                } else {
+                    val items = distributors.toTypedArray()
+                    AlertDialog.Builder(this@FidoUriHandlerActivity)
+                        .setTitle("Select Push Distributor")
+                        .setItems(items) { _, which ->
+                            UnifiedPush.saveDistributor(this@FidoUriHandlerActivity, items[which])
+                            UnifiedPush.register(
+                                context = this@FidoUriHandlerActivity,
+                                instance = instanceId,
+                                vapid = vapidKey
+                            )
+                        }
+                        .show()
+                }
             } catch (e: Exception) {
                 Log.e("FidoUriHandler", "UnifiedPush registration call failed", e)
                 tv.append("\n➜ Sunup registration error: ${e.message}")
@@ -243,7 +266,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         tv.append("\n➜ Unlinking QR-less push subscription...")
         lifecycleScope.launch {
             try {
-                UnifiedPush.unregisterApp(this@FidoUriHandlerActivity, currentContactId)
+                UnifiedPush.unregister(this@FidoUriHandlerActivity, currentContactId)
             } catch (e: Exception) {
                 Log.w("FidoUriHandler", "UnifiedPush unregister warning", e)
             }
