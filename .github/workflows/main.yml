@@ -2,12 +2,12 @@ name: Android CI Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "Client" ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "Client" ]
   workflow_dispatch:
 
 # Cancel in-progress runs on the same branch/PR when a new commit is pushed
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     name: Build Release APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     env:
@@ -44,10 +44,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          # Explicitly provision Gradle 8.14.5 into system PATH because root gradlew scripts
-          # are omitted from the repository and 'gradle assembleRelease' otherwise falls back to Runner's Gradle 9.8.1.
+          # Explicitly provision Gradle 8.14.5 into system PATH and disable remote cache
+          # to prevent GitHub Actions cache egress quota RestErrors.
           gradle-version: '8.14.5'
-          cache-read-only: ${{ github.event_name == 'pull_request' }}
+          cache-disabled: true
 
       # ==========================================
       # 2. Build Process (Release)
@@ -65,7 +65,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          gradle assembleRelease --stacktrace --parallel --build-cache --no-daemon
+          gradle assembleRelease --stacktrace --parallel --no-daemon
           mv app/build/outputs/apk/release/app-release.apk "app/build/outputs/apk/release/passkey-bridge-${SHORT_SHA}.apk"
 
       # ==========================================
