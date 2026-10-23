@@ -30,7 +30,7 @@ class TunnelWebsocket(
         // does not synchronously load the system X509TrustManager and SSLContext on the main thread.
         // Tighten connectTimeout to 10s so OkHttp 4.x route fallback recovers faster when a dual-stack
         // IPv6 route is unreachable, while keeping readTimeout(0) and 5s pings for background survival.
-        private val sharedClient: OkHttpClient by lazy {
+        internal val sharedClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.SECONDS)
