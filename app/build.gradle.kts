@@ -98,4 +98,7 @@ dependencies {
     // Match Kotlin 2.x metadata format to prevent binary compatibility warnings during R8 shrinking
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Matrix-only QR code generator for CTAP 2.3 client hybrid flow
+    implementation("com.google.zxing:core:3.5.3")
 }

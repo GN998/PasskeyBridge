@@ -6,18 +6,31 @@ import java.nio.ByteOrder
 object DomainDerivation {
     private val ASSIGNED_DOMAINS = listOf("cable.ua5v.com", "cable.auth.com")
 
+    // Expose known assigned domain count for CTAP 2.3 §11.5.1.1 QR code CBOR Key 2
+    const val NUM_ASSIGNED_DOMAINS: Long = 2L
+
     // Cache the last derived tunnel domain as an atomic pair to avoid redundant SHA-256 and Base32 computations
     @Volatile
     private var cachedDerivation: Pair<Int, String>? = null
 
     fun deriveDomainForTunnelId(tunnelId: Int): String {
+        return resolveDomainOrNull(tunnelId) ?: ASSIGNED_DOMAINS[0]
+    }
+
+    /**
+     * Resolve tunnel server domain per CTAP 2.3 §11.5.1.1.1, returning null if an assigned domain ID (<256)
+     * is outside the known ASSIGNED_DOMAINS table or if tunnelId exceeds uint16 bounds.
+     */
+    fun resolveDomainOrNull(tunnelId: Int): String? {
+        if (tunnelId !in 0..65535) return null
+
         cachedDerivation?.let { (id, domain) ->
             if (id == tunnelId) return domain
         }
 
         // IDs below 256 are reserved directly assigned domains
         if (tunnelId < 256) {
-            return if (tunnelId in ASSIGNED_DOMAINS.indices) ASSIGNED_DOMAINS[tunnelId] else ASSIGNED_DOMAINS[0]
+            return ASSIGNED_DOMAINS.getOrNull(tunnelId)
         }
 
         // CTAP 2.3 Hybrid Routing ID derivation algorithm (Little-Endian & specific prefix)

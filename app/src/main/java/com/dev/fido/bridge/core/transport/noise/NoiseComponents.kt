@@ -26,6 +26,16 @@ const val HKDF_ALGORITHM = "HmacSHA256"
 const val AEMK_ALGORITHM = "AES"
 const val EC_ALGORITHM = "EC"
 
+/**
+ * Unpacked fields from a verified 16-byte caBLE v2 BLE proximity advertisement plaintext per CTAP 2.3 §11.5.1.1.
+ */
+data class DecryptedBleAdvert(
+    val plaintext: ByteArray,
+    val nonce: ByteArray,
+    val routingId: ByteArray,
+    val encodedTunnelServerDomain: Int
+)
+
 object CryptoHelper {
     private val secureRandom = SecureRandom()
 
@@ -64,6 +74,14 @@ object CryptoHelper {
      */
     fun uncompressECKey(pub: ECPublicKey): ByteArray =
         encodeUncompressedPoint(pub.w.affineX, pub.w.affineY)
+
+    /**
+     * Compress JCA ECPublicKey into a 33-byte SEC1 point (0x02/0x03 || X) for QR CBOR Key 0 per CTAP 2.3 §11.5.1.1.
+     */
+    fun compressECKey(pub: ECPublicKey): ByteArray {
+        val prefix: Byte = if (pub.w.affineY.testBit(0)) 0x03 else 0x02
+        return byteArrayOf(prefix) + pub.w.affineX.toFixedLengthBytes(32)
+    }
 
     /**
      * Decompress and validate 33-byte SEC1 compressed EC public key from QR payload into 65-byte uncompressed format per CTAP 2.3 §11.5.1.
@@ -133,6 +151,46 @@ object CryptoHelper {
         System.arraycopy(ciphertext, 0, result, 0, 16)
         System.arraycopy(tag, 0, result, 16, 4)
         return result
+    }
+
+    /**
+     * Trial-decrypt a candidate BLE service data payload (at least 20 bytes) using the 64-byte derived EID key
+     * per CTAP 2.3 §11.5.1.1. Ignore trailing extended advertising suffix bytes if present.
+     */
+    fun trialDecryptEid(eidKey: ByteArray, candidateServiceData: ByteArray): DecryptedBleAdvert? {
+        if (eidKey.size != 64 || candidateServiceData.size < 20) return null
+
+        val hmacKey = eidKey.copyOfRange(32, 64)
+        val mac = Mac.getInstance(HKDF_ALGORITHM)
+        mac.init(SecretKeySpec(hmacKey, HKDF_ALGORITHM))
+        mac.update(candidateServiceData, 0, 16)
+        val expectedTag = mac.doFinal()
+
+        // Constant-time 4-byte HMAC tag comparison
+        var diff = 0
+        for (i in 0 until 4) {
+            diff = diff or (expectedTag[i].toInt() xor candidateServiceData[16 + i].toInt())
+        }
+        if (diff != 0) return null
+
+        val aesKey = eidKey.copyOfRange(0, 32)
+        val cipher = Cipher.getInstance("AES/CBC/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aesKey, AEMK_ALGORITHM), IvParameterSpec(ByteArray(16)))
+        val plaintext = cipher.doFinal(candidateServiceData, 0, 16)
+
+        // Reject advertisement if reserved flags byte (byte 0) is non-zero per CTAP 2.3 §11.5.1.1
+        if (plaintext[0] != 0x00.toByte()) return null
+
+        val nonce = plaintext.copyOfRange(1, 11)
+        val routingId = plaintext.copyOfRange(11, 14)
+        val encodedDomain = (plaintext[14].toInt() and 0xFF) or ((plaintext[15].toInt() and 0xFF) shl 8)
+
+        return DecryptedBleAdvert(
+            plaintext = plaintext,
+            nonce = nonce,
+            routingId = routingId,
+            encodedTunnelServerDomain = encodedDomain
+        )
     }
 
     /**
