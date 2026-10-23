@@ -21,12 +21,10 @@ class CtapCodecException(
 
 /**
  * Map CTAP2 boolean "uv" option flag to WebAuthn userVerification requirement string.
+ * Since AuthenticatorInfo advertises options["uv"] = true, CTAP 2.3 §6.1.1 & §6.2.1 platforms
+ * send "uv" = true for both "required" and "preferred", and omit "uv" (null) only when "discouraged".
  */
-fun Boolean?.toWebAuthnUv(): String = when (this) {
-    true -> "required"
-    false -> "discouraged"
-    null -> "preferred"
-}
+fun Boolean?.toWebAuthnUv(): String = if (this == true) "required" else "discouraged"
 
 object CtapCodec {
 
