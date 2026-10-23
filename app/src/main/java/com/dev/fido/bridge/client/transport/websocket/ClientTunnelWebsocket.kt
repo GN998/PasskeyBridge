@@ -1,7 +1,6 @@
 package com.dev.fido.bridge.client.transport.websocket
 
 import android.util.Log
-import com.dev.fido.bridge.core.security.DomainDerivation
 import com.dev.fido.bridge.core.security.toHex
 import com.dev.fido.bridge.core.transport.websocket.TunnelWebsocket
 import okhttp3.Request

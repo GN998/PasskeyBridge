@@ -4,3 +4,11 @@
     public static int v(...);
     public static int d(...);
 }
+
+# Preserve Android 14+ CredentialProviderService Binder entrypoints from aggressive R8 method inlining
+-keep class * extends androidx.credentials.provider.CredentialProviderService {
+    public <init>();
+    public void onBeginGetCredentialRequest(***);
+    public void onBeginCreateCredentialRequest(***);
+    public void onClearCredentialStateRequest(***);
+}
