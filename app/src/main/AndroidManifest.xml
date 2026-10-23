@@ -2,9 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Declare neverForLocation on Android 14+ as BLE proximity advertising does not derive physical location -->
+    <!-- Declare neverForLocation on Android 14+ as BLE proximity advertising/scanning does not derive physical location -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADVERTISE"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN" />
@@ -40,6 +43,29 @@
                 <data android:scheme="FIDO" />
             </intent-filter>
         </activity>
+
+        <!-- Client mode QR prompt activity invoked via PendingIntent from BridgeCredentialProviderService -->
+        <activity
+            android:name=".client.ui.ClientQrPromptActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.PasskeyBridge" />
+
+        <!-- Android 14+ Credential Provider service for client-mode hybrid QR presentation -->
+        <service
+            android:name=".client.provider.BridgeCredentialProviderService"
+            android:enabled="true"
+            android:exported="true"
+            android:label="Passkey Bridge"
+            android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.credentials.CredentialProviderService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.credentials.provider"
+                android:resource="@xml/provider" />
+        </service>
 
         <service
             android:name=".feature.session.BridgeForegroundService"

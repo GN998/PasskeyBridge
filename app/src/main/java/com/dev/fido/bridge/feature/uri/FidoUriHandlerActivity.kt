@@ -162,12 +162,21 @@ class FidoUriHandlerActivity : AppCompatActivity() {
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menu.add(Menu.NONE, 1, Menu.NONE, "⚙").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        menu.add(Menu.NONE, 2, Menu.NONE, "Enable Client Provider").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         if (item.itemId == 1) {
             showTunnelSettingsDialog()
+            return true
+        } else if (item.itemId == 2) {
+            try {
+                val pendingIntent = androidx.credentials.CredentialManager.create(this).createSettingsPendingIntent()
+                startIntentSenderForResult(pendingIntent.intentSender, 1002, null, 0, 0, 0)
+            } catch (e: Exception) {
+                Toast.makeText(this, "Open Settings > Passwords & passkeys to enable Passkey Bridge", Toast.LENGTH_LONG).show()
+            }
             return true
         }
         return super.onOptionsItemSelected(item)
