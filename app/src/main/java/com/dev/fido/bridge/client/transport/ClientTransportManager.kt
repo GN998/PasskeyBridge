@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -48,7 +49,7 @@ class ClientTransportManager(
     /**
      * Start a QR-initiated client transaction: scan for the authenticator's BLE EID advertisement,
      * connect to the authenticator-selected tunnel domain, complete the Noise KNpsk0 initiator handshake,
-     * exchange the CTAP2 command/response, and send a 0x00 shutdown frame per PXP §6.2.
+     * negotiate UV capability from Post-Handshake GetInfo, and exchange the CTAP2 command/response per PXP §6.2.
      */
     @Synchronized
     fun startClientSession(
@@ -59,56 +60,59 @@ class ClientTransportManager(
     ) {
         stopSession()
 
-        val encodedCtapPayload = ClientCtapCodec.encodeRequest(ctapRequest)
-        val commandByte = encodedCtapPayload[0]
+        // Offload HKDF key derivation and BLE binder registration from the UI thread
+        transportScope.launch {
+            val eidKey = CryptoHelper.endif(
+                ikm = qrSession.qrSecret,
+                salt = ByteArray(0),
+                info = byteArrayOf(1, 0, 0, 0),
+                length = 64
+            )
+            val tunnelId = CryptoHelper.endif(
+                ikm = qrSession.qrSecret,
+                salt = ByteArray(0),
+                info = byteArrayOf(2, 0, 0, 0),
+                length = 16
+            )
 
-        // Pre-derive the 64-byte EID key (purpose = 1) and 16-byte tunnel ID (purpose = 2) from qrSecret
-        val eidKey = CryptoHelper.endif(
-            ikm = qrSession.qrSecret,
-            salt = ByteArray(0),
-            info = byteArrayOf(1, 0, 0, 0),
-            length = 64
-        )
-        val tunnelId = CryptoHelper.endif(
-            ikm = qrSession.qrSecret,
-            salt = ByteArray(0),
-            info = byteArrayOf(2, 0, 0, 0),
-            length = 16
-        )
+            ensureActive()
 
-        val scanStarted = bleScanner.startScanning(
-            eidKey = eidKey,
-            onAdvertMatched = { advert ->
-                transportScope.launch {
-                    connectTunnelAndExecuteCeremony(
-                        qrSession = qrSession,
-                        tunnelId = tunnelId,
-                        advert = advert,
-                        commandByte = commandByte,
-                        encodedCtapPayload = encodedCtapPayload,
-                        onSuccess = onSuccess,
-                        onError = onError
-                    )
+            val scanStarted = bleScanner.startScanning(
+                eidKey = eidKey,
+                onAdvertMatched = { advert ->
+                    transportScope.launch {
+                        connectTunnelAndExecuteCeremony(
+                            qrSession = qrSession,
+                            tunnelId = tunnelId,
+                            advert = advert,
+                            ctapRequest = ctapRequest,
+                            onSuccess = onSuccess,
+                            onError = onError
+                        )
+                    }
+                },
+                onFailure = { errorCode ->
+                    stopSession()
+                    onError("BLE scan failed (code $errorCode).")
                 }
-            },
-            onFailure = { errorCode ->
-                stopSession()
-                onError("BLE scan failed (code $errorCode).")
+            )
+
+            if (!scanStarted) {
+                onError("Failed to start BLE scanner. Check Bluetooth state and permissions.")
+                return@launch
             }
-        )
 
-        if (!scanStarted) {
-            onError("Failed to start BLE scanner. Check Bluetooth state and permissions.")
-            return
-        }
+            onStatusUpdate?.invoke("Waiting for other device to scan QR code...")
 
-        onStatusUpdate?.invoke("Waiting for other device to scan QR code...")
-
-        // Enforce a 90-second overall ceremony timeout while waiting for QR scan and user verification
-        sessionTimeoutJob = transportScope.launch {
-            delay(90_000)
-            stopSession()
-            onError("Transaction timed out.")
+            // Enforce a 90-second overall ceremony timeout while waiting for QR scan and user verification
+            synchronized(this@ClientTransportManager) {
+                sessionTimeoutJob?.cancel()
+                sessionTimeoutJob = transportScope.launch {
+                    delay(90_000)
+                    stopSession()
+                    onError("Transaction timed out.")
+                }
+            }
         }
     }
 
@@ -116,8 +120,7 @@ class ClientTransportManager(
         qrSession: ClientQrSessionData,
         tunnelId: ByteArray,
         advert: com.dev.fido.bridge.core.transport.noise.DecryptedBleAdvert,
-        commandByte: Byte,
-        encodedCtapPayload: ByteArray,
+        ctapRequest: Ctap2Request,
         onSuccess: (Ctap2Response) -> Unit,
         onError: (String) -> Unit
     ) {
@@ -144,6 +147,11 @@ class ClientTransportManager(
         val clientHello = noiseSession.startHandshakeAndBuildClientHello(psk)
         val awaitingPostHandshake = AtomicBoolean(true)
         val completed = AtomicBoolean(false)
+        val commandByte: Byte = when (ctapRequest) {
+            is Ctap2Request.MakeCredential -> 0x01
+            is Ctap2Request.GetAssertion -> 0x02
+            is Ctap2Request.GetInfo -> 0x04
+        }
 
         lateinit var ws: ClientTunnelWebsocket
 
@@ -172,9 +180,12 @@ class ClientTransportManager(
                         val postHandshakeBytes = noiseSession.decrypt(frame)
                         val postMap = CtapCodec.SimpleCbor.read(postHandshakeBytes, strict = false) as? Map<*, *>
                             ?: throw IllegalArgumentException("Invalid post-handshake CBOR map")
-                        if (postMap[1L] !is ByteArray) {
-                            throw IllegalArgumentException("Post-handshake message missing getInfo (key 1)")
-                        }
+                        val getInfoBytes = postMap[1L] as? ByteArray
+                            ?: throw IllegalArgumentException("Post-handshake message missing getInfo (key 1)")
+
+                        // Negotiate built-in UV per CTAP 2.3 §6.1.1 / §6.2.2 based on peer GetInfo capabilities
+                        val supportsBuiltInUv = ClientCtapCodec.extractBuiltInUvSupport(getInfoBytes)
+                        val encodedCtapPayload = ClientCtapCodec.encodeRequest(ctapRequest, supportsBuiltInUv)
 
                         onStatusUpdate?.invoke("Verify identity on the other device...")
                         // Send framed CTAP command (0x01 = typeCTAP || commandByte || CBOR)

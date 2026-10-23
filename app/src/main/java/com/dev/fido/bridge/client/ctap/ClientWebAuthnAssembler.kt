@@ -133,7 +133,7 @@ object ClientWebAuthnAssembler {
         )
     }
 
-    /**
+/**
      * Assemble WebAuthn AuthenticationResponseJSON string from a CTAP2 GetAssertionResponse per WebAuthn §5.1.
      */
     fun buildGetAssertionResponseJson(
@@ -142,7 +142,7 @@ object ClientWebAuthnAssembler {
         fallbackAllowList: List<CredentialDescriptor>? = null
     ): String {
         val effectiveCredId = response.credentialId.takeIf { it.isNotEmpty() }
-            ?: fallbackAllowList?.singleOrNull()?.id
+            ?: fallbackAllowList?.firstOrNull()?.id
             ?: ByteArray(0)
         val credIdB64 = CryptoUtils.encodeBase64UrlNoPadding(effectiveCredId)
 

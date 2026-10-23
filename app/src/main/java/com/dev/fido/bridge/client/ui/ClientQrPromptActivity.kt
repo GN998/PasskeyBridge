@@ -214,15 +214,11 @@ class ClientQrPromptActivity : AppCompatActivity() {
             return
         }
 
-        // Generate ephemeral QR session and render the FIDO:/ QR bitmap immediately
-        val qrSession = HybridQrGenerator.generateQrSession(prepared.operationHint)
-        val qrBitmap = QrBitmapRenderer.render(qrSession.fidoUri, 230.dp)
-        qrImageView.setImageBitmap(qrBitmap)
-        qrImageView.visibility = View.VISIBLE
-
         titleView.text = if (isCreateMode) "Scan to Create Passkey" else "Scan to Sign In with Passkey"
 
-        // Start BLE proximity scanning and tunnel negotiation on IO threads before starting foreground service
+        val qrSession = HybridQrGenerator.generateQrSession(prepared.operationHint)
+
+        // Dispatch physical BLE scanning first before rendering the 230dp QR bitmap
         transportManager.startClientSession(
             qrSession = qrSession,
             ctapRequest = prepared.ctapRequest,
@@ -239,6 +235,18 @@ class ClientQrPromptActivity : AppCompatActivity() {
         )
 
         startForegroundService(serviceIntent)
+
+        // Render the QR matrix off the main thread so window transition and BLE startup are never blocked
+        val qrSizePx = 230.dp
+        Thread {
+            val qrBitmap = QrBitmapRenderer.render(qrSession.fidoUri, qrSizePx)
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    qrImageView.setImageBitmap(qrBitmap)
+                    qrImageView.visibility = View.VISIBLE
+                }
+            }
+        }.start()
     }
 
     private fun extractAndPrepareCeremony(): PreparedClientCeremony? {

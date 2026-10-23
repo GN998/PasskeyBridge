@@ -14,10 +14,39 @@ import com.dev.fido.bridge.core.ctap.model.CtapStatus
  */
 object ClientCtapCodec {
 
-    fun encodeRequest(request: Ctap2Request): ByteArray {
+    /**
+     * Inspect the authenticator's raw GetInfo response bytes from the post-handshake message
+     * and return whether built-in user verification (options["uv"] == true) is supported per CTAP 2.3 §6.4.
+     */
+    fun extractBuiltInUvSupport(getInfoBytes: ByteArray): Boolean {
+        return runCatching {
+            // Post-handshake Key 1 may be a raw CBOR map or prefixed with 0x00 status byte depending on peer implementation
+            val cborSlice = if (getInfoBytes.isNotEmpty() && getInfoBytes[0] == CtapStatus.SUCCESS) {
+                getInfoBytes.copyOfRange(1, getInfoBytes.size)
+            } else {
+                getInfoBytes
+            }
+            val infoMap = CtapCodec.SimpleCbor.read(cborSlice, strict = false) as? Map<*, *>
+            val optionsMap = infoMap?.get(4L) as? Map<*, *>
+            optionsMap?.get("uv") == true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Serialize a [Ctap2Request] into a wire command byte + canonical CBOR map.
+     * Strip the "uv" option if the peer authenticator does not advertise built-in UV support
+     * per CTAP 2.3 §6.1.1 / §6.2.2 to prevent CTAP2_ERR_INVALID_OPTION (0x2C) on USB security keys.
+     */
+    fun encodeRequest(
+        request: Ctap2Request,
+        authenticatorSupportsBuiltInUv: Boolean = true
+    ): ByteArray {
         return when (request) {
             is Ctap2Request.GetInfo -> byteArrayOf(0x04)
             is Ctap2Request.MakeCredential -> {
+                val filteredOptions = request.options?.filterKeys { key ->
+                    key != "uv" || authenticatorSupportsBuiltInUv
+                }
                 val map = buildMap<Long, Any> {
                     put(1L, request.clientDataHash)
                     put(2L, buildMap<String, Any> {
@@ -33,7 +62,7 @@ object ClientCtapCodec {
                     request.excludeList?.takeIf { it.isNotEmpty() }?.let { list ->
                         put(5L, list.map { it.toCborMap() })
                     }
-                    request.options?.takeIf { it.isNotEmpty() }?.let { opts ->
+                    filteredOptions?.takeIf { it.isNotEmpty() }?.let { opts ->
                         put(7L, opts)
                     }
                 }
@@ -48,7 +77,8 @@ object ClientCtapCodec {
                     }
                     val optionsMap = buildMap<String, Boolean> {
                         if (!request.userPresence) put("up", false)
-                        if (request.userVerification == "required" || request.userVerification == "preferred") {
+                        val wantsUv = request.userVerification == "required" || request.userVerification == "preferred"
+                        if (wantsUv && authenticatorSupportsBuiltInUv) {
                             put("uv", true)
                         }
                     }
