@@ -247,7 +247,11 @@ object CtapCodec {
          * Enforce strict CTAP 2.3 §8 canonical constraints by default, while allowing relaxed RFC 8949
          * decoding when parsing internal WebAuthn attestationObjects returned by Android credential providers.
          */
-        fun read(bytes: ByteArray, strict: Boolean = true): Any? {
+        fun read(
+            bytes: ByteArray,
+            strict: Boolean = true,
+            allowTrailingBytes: Boolean = false
+        ): Any? {
             if (bytes.isEmpty()) {
                 throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Empty CBOR byte stream")
             }
@@ -365,8 +369,8 @@ object CtapCodec {
                 }
             }
             val root = readItem(0)
-            // Reject trailing unconsumed bytes to guarantee strict single-item CBOR framing per CTAP 2.3 §8
-            if (pos != bytes.size) {
+            // Reject trailing unconsumed bytes unless parsing an embedded prefix structure (e.g., COSE_Key in authData)
+            if (!allowTrailingBytes && pos != bytes.size) {
                 throw CtapCodecException(CtapStatus.ERR_INVALID_CBOR, "Trailing bytes after root CBOR item: ${bytes.size - pos}")
             }
             return root
