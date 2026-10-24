@@ -134,19 +134,19 @@ class TransportManager(
                         // delivered on the main looper so the tunnel does not hang until the 60s watchdog expires.
                         if (clearActiveSession(sessionWs)) {
                             sessionWs.cancel()
-                            onStatusUpdate?.invoke("Error: BLE advertising failed (code $errorCode).")
+                            onStatusUpdate?.invoke("BLE advertising failed ($errorCode)")
                             onSessionTerminated?.invoke()
                         }
                     }
                     if (!bleDispatched) {
                         if (clearActiveSession(sessionWs)) {
-                            onStatusUpdate?.invoke("Error: Failed to start BLE advertising.")
+                            onStatusUpdate?.invoke("Failed to start BLE advertising")
                             sessionWs.cancel()
                             onSessionTerminated?.invoke()
                         }
                         return@TunnelWebsocket
                     }
-                    onStatusUpdate?.invoke("BLE Advertising Started with 20-byte EID...")
+                    onStatusUpdate?.invoke("Connecting...")
 
                     // 4. Derive 32-byte Noise PSK using the EXACT same advertPlaintext while BLE radio is already broadcasting
                     val noisePsk = CryptoHelper.endif(
@@ -167,7 +167,7 @@ class TransportManager(
                                 delay(60_000)
                                 if (!sessionNoise.isHandshakeComplete && clearActiveSession(sessionWs)) {
                                     Log.w("TransportManager", "Handshake timed out waiting for ClientHello; closing session.")
-                                    onStatusUpdate?.invoke("Handshake timed out. Please scan the QR code again.")
+                                    onStatusUpdate?.invoke("Connection timed out")
                                     bleAdvertiser.stopAdvertising()
                                     sessionWs.cancel()
                                     onSessionTerminated?.invoke()
@@ -194,9 +194,8 @@ class TransportManager(
                             sessionWs.sendFrame(serverHello)
                             sendEncryptedFrame(CACHED_POST_HANDSHAKE_MSG)
 
-                            val msg = "Noise KNpsk0 Handshake Success!\nSent Post-Handshake Message."
-                            Log.d("TransportManager", msg)
-                            onStatusUpdate?.invoke(msg)
+                            Log.d("TransportManager", "Noise KNpsk0 Handshake Success! Sent Post-Handshake Message.")
+                            onStatusUpdate?.invoke("Connected")
                         } else {
                             val decrypted = sessionNoise.decrypt(encryptedFrame)
                             // Treat empty post-handshake frames as a protocol error per CTAP 2.3 §11.5.1.2
@@ -216,9 +215,8 @@ class TransportManager(
                                     // Avoid coercing empty CTAP payloads into a fake 0x00 command byte so logs reflect actual wire data
                                     val commandByte = ctapReq.firstOrNull()
                                     val cmdLabel = commandByte?.let { "0x%02X".format(it) } ?: "EMPTY"
-                                    val logMsg = "Received CTAP Request ($cmdLabel)!"
-                                    Log.d("TransportManager", logMsg)
-                                    onStatusUpdate?.invoke(logMsg)
+                                    Log.d("TransportManager", "Received CTAP Request ($cmdLabel)!")
+                                    onStatusUpdate?.invoke("Verifying...")
 
                                     // Dispatch CTAP request asynchronously so WebSocket reader thread remains responsive
                                     transportScope.launch {
@@ -245,22 +243,22 @@ class TransportManager(
 
                                                 if (!isSilentPreFlight && clearActiveSession(sessionWs)) {
                                                     val msg = if (statusByte == CtapStatus.SUCCESS) {
-                                                        "CTAP Transaction Complete."
+                                                        "Completed"
                                                     } else {
-                                                        "CTAP Rejected (Status: 0x${"%02X".format(statusByte)})."
+                                                        "Cancelled (0x${"%02X".format(statusByte)})"
                                                     }
                                                     onStatusUpdate?.invoke(msg)
                                                     sessionWs.close()
                                                     onSessionTerminated?.invoke()
                                                 } else if (statusByte != CtapStatus.SUCCESS) {
-                                                    onStatusUpdate?.invoke("CTAP Rejected (Status: 0x${"%02X".format(statusByte)}).")
+                                                    onStatusUpdate?.invoke("Cancelled (0x${"%02X".format(statusByte)})")
                                                 }
                                             }
                                         } catch (e: CancellationException) {
                                             throw e
                                         } catch (e: Exception) {
                                             Log.e("TransportManager", "Error processing CTAP request", e)
-                                            onStatusUpdate?.invoke("CTAP Error: ${e.message}")
+                                            onStatusUpdate?.invoke("Error: ${e.message}")
                                             // Cancel the underlying WebSocket on fatal CTAP dispatch errors to prevent orphaned keep-alive pings
                                             if (clearActiveSession(sessionWs)) {
                                                 sessionWs.cancel()
@@ -276,7 +274,7 @@ class TransportManager(
                                     Log.d("TransportManager", "Received Shutdown message (0x00), closing tunnel.")
                                     bleAdvertiser.stopAdvertising()
                                     if (clearActiveSession(sessionWs)) {
-                                        onStatusUpdate?.invoke("CTAP Transaction Complete.")
+                                        onStatusUpdate?.invoke("Completed")
                                         sessionWs.close()
                                         onSessionTerminated?.invoke()
                                     }
@@ -285,7 +283,7 @@ class TransportManager(
                             }
                         }
                     } catch (e: Exception) {
-                        val msg = "Frame Error: ${e.message}"
+                        val msg = "Error: ${e.message}"
                         Log.e("TransportManager", msg, e)
                         bleAdvertiser.stopAdvertising()
                         // Cancel the WebSocket when handshake or frame decryption fails so the tunnel does not remain open indefinitely
@@ -296,11 +294,7 @@ class TransportManager(
                         }
                     }
                 },
-                onStatusUpdate = { status ->
-                    if (tunnelWebsocket === sessionWs) {
-                        onStatusUpdate?.invoke(status)
-                    }
-                },
+                onStatusUpdate = null,
                 onDisconnected = {
                     // Stop BLE advertising and reset session guard via explicit disconnect callback instead of log string matching
                     if (clearActiveSession(sessionWs)) {

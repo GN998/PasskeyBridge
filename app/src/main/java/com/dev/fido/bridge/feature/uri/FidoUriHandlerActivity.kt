@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -36,8 +37,12 @@ import com.dev.fido.bridge.feature.session.BridgeSessionController
 
 class FidoUriHandlerActivity : AppCompatActivity() {
 
+    private lateinit var rootFrame: FrameLayout
     private lateinit var scrollContainer: ScrollView
     private lateinit var tv: TextView
+    private lateinit var scanSheetCard: LinearLayout
+    private lateinit var scanTitleView: TextView
+    private lateinit var scanStatusView: TextView
     private lateinit var sessionController: BridgeSessionController
     private val PERMISSION_REQUEST_CODE = 1001
 
@@ -55,92 +60,129 @@ class FidoUriHandlerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         tv = TextView(this).apply {
-            text = "Processing FIDO URI..."
+            text = "Ready"
             textSize = 14f
             typeface = Typeface.MONOSPACE
             setTextColor(Color.parseColor("#E2E8F0"))
+            gravity = Gravity.START or Gravity.TOP
+            setLineSpacing(6.dp.toFloat(), 1.1f)
+            val padCard = 20.dp
+            setPadding(padCard, padCard, padCard, padCard)
+            val r = 14.dp.toFloat()
+            background = createCardBackground(FloatArray(8) { r })
         }
 
         scrollContainer = ScrollView(this).apply {
             clipToPadding = false
-            addView(tv)
+            setBackgroundColor(Color.parseColor("#020617"))
+            addView(tv, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ))
         }
 
-        // Reserve upper half of the active window as a dim scrim in QR mode while preserving system bar and cutout insets across both modes
-        ViewCompat.setOnApplyWindowInsetsListener(scrollContainer) { view, windowInsets ->
+        scanTitleView = TextView(this).apply {
+            text = "Passkey"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#F8FAFC"))
+            gravity = Gravity.CENTER
+        }
+
+        scanStatusView = TextView(this).apply {
+            text = "Connecting..."
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setTextColor(Color.parseColor("#94A3B8"))
+            gravity = Gravity.CENTER
+        }
+
+        val rSheet = 24.dp.toFloat()
+        scanSheetCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            val pad = 24.dp
+            setPadding(pad, pad, pad, pad)
+            background = createCardBackground(floatArrayOf(rSheet, rSheet, rSheet, rSheet, 0f, 0f, 0f, 0f))
+            // Consume clicks inside the bottom sheet card so tapping it does not trigger scrim dismissal
+            setOnClickListener { }
+
+            addView(scanTitleView, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 12.dp })
+
+            addView(scanStatusView, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        rootFrame = FrameLayout(this).apply {
+            addView(scrollContainer, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            addView(scanSheetCard, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            ))
+        }
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootFrame) { _, windowInsets ->
             val insets = windowInsets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            val padCard = 20.dp
-            if (isQrScanMode) {
-                val windowHeight = windowManager.currentWindowMetrics.bounds.height()
-                view.setPadding(insets.left, windowHeight / 2, insets.right, 0)
-                tv.setPadding(padCard, padCard, padCard, padCard + insets.bottom)
-            } else {
-                val pad = 16.dp
-                view.setPadding(insets.left + pad, insets.top + pad, insets.right + pad, insets.bottom + pad)
-                tv.setPadding(padCard, padCard, padCard, padCard)
-            }
+            val pad = 16.dp
+            scrollContainer.setPadding(
+                insets.left + pad,
+                insets.top + pad,
+                insets.right + pad,
+                insets.bottom + pad
+            )
+            scanSheetCard.setPadding(
+                24.dp + insets.left,
+                24.dp,
+                24.dp + insets.right,
+                24.dp + insets.bottom
+            )
             windowInsets
         }
 
-        setContentView(scrollContainer)
+        setContentView(rootFrame)
         applyUiMode(intent?.dataString != null)
         checkAndRequestPermissions()
     }
 
     /**
-     * Switch between full-screen terminal mode (launcher) and half-screen bottom-sheet mode (QR scan).
+     * Switch between full-screen terminal mode (launcher) and compact bottom-sheet mode (QR scan).
      */
     private fun applyUiMode(scanMode: Boolean) {
         isQrScanMode = scanMode
-        val padCard = 20.dp
 
         if (scanMode) {
             setTranslucent(true)
             supportActionBar?.hide()
 
-            scrollContainer.isFillViewport = true
-            scrollContainer.setBackgroundColor(Color.parseColor("#88000000"))
-            // Remove the transient QR task from Recents on scrim dismissal to prevent system re-creation with stale FIDO URIs
-            scrollContainer.setOnClickListener { finishAndRemoveTask() }
+            scrollContainer.visibility = View.GONE
+            scanSheetCard.visibility = View.VISIBLE
 
-            val r = 24.dp.toFloat()
-            tv.apply {
-                setOnClickListener { }
-                gravity = Gravity.CENTER
-                setLineSpacing(4.dp.toFloat(), 1.15f)
-                setPadding(padCard, padCard, padCard, padCard)
-                background = createCardBackground(floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f))
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-            }
+            rootFrame.setBackgroundColor(Color.parseColor("#88000000"))
+            // Remove the transient QR task from Recents on scrim dismissal to prevent system re-creation with stale FIDO URIs
+            rootFrame.setOnClickListener { finishAndRemoveTask() }
         } else {
             setTranslucent(false)
             supportActionBar?.show()
 
-            scrollContainer.isFillViewport = false
-            scrollContainer.setBackgroundColor(Color.parseColor("#020617"))
-            scrollContainer.setOnClickListener(null)
-            scrollContainer.setClickable(false)
+            scanSheetCard.visibility = View.GONE
+            scrollContainer.visibility = View.VISIBLE
 
-            val r = 14.dp.toFloat()
-            tv.apply {
-                setOnClickListener(null)
-                setClickable(false)
-                gravity = Gravity.START or Gravity.TOP
-                setLineSpacing(6.dp.toFloat(), 1.1f)
-                setPadding(padCard, padCard, padCard, padCard)
-                background = createCardBackground(FloatArray(8) { r })
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
-                )
-            }
+            rootFrame.setBackgroundColor(Color.parseColor("#020617"))
+            rootFrame.setOnClickListener(null)
+            rootFrame.isClickable = false
         }
-        ViewCompat.requestApplyInsets(scrollContainer)
+        ViewCompat.requestApplyInsets(rootFrame)
     }
 
     private fun createCardBackground(radii: FloatArray) = GradientDrawable().apply {
@@ -154,7 +196,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
      */
     private fun updateStatus(status: String, resetTerminal: Boolean = false) {
         if (isQrScanMode) {
-            tv.text = status.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() } ?: status.trim()
+            scanStatusView.text = status.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() } ?: status.trim()
         } else {
             if (resetTerminal) tv.text = status else tv.append("\n➜ $status")
         }
@@ -251,7 +293,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
                 initializeController()
                 handleIntent(intent)
             } else {
-                updateStatus("Bluetooth permissions are required for FIDO proximity verification.", resetTerminal = true)
+                updateStatus("Bluetooth permission required.", resetTerminal = true)
             }
         }
     }
@@ -290,7 +332,7 @@ class FidoUriHandlerActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent?) {
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
-            updateStatus("Bluetooth is turned off. Please enable Bluetooth and scan again.", resetTerminal = true)
+            updateStatus("Enable Bluetooth and try again.", resetTerminal = true)
             return
         }
 
@@ -305,34 +347,32 @@ class FidoUriHandlerActivity : AppCompatActivity() {
             val qrData = HybridQrParser.parse(uriString)
             if (qrData == null) {
                 activeFidoUri = null
-                updateStatus("Invalid or unsupported FIDO URI.", resetTerminal = true)
+                updateStatus("Invalid FIDO QR code.", resetTerminal = true)
                 return
             }
 
-            if (!isQrScanMode) {
-                val flowLabel = if (qrData.operationHint == "mc") "MakeCredential (Register)" else "GetAssertion (Sign In)"
-                tv.text = "Parsing...\nParsed successfully. Routing to CTAP Dispatcher...\n➜ Flow Hint: $flowLabel"
+            if (isQrScanMode) {
+                scanTitleView.text = if (qrData.operationHint == "mc") "Create Passkey" else "Sign In"
+            } else {
+                val flowLabel = if (qrData.operationHint == "mc") "Create Passkey" else "Sign In"
+                tv.text = "Flow: $flowLabel"
                 qrData.timestampSeconds?.let { ts ->
                     if ((System.currentTimeMillis() / 1000L) - ts > 120L) {
-                        tv.append("\n➜ Warning: QR code may be expired.")
+                        tv.append("\n➜ QR code may be expired")
                     }
                 }
             }
 
             try {
                 sessionController.onQrCodeScanned(qrData.publicKey, qrData.secret, qrData.tunnelServerId)
-                if (isQrScanMode) {
-                    updateStatus("BLE Advertising & WebSocket connecting...")
-                } else {
-                    tv.append("\n\nSession initiated.\nBLE Advertising & WebSocket connecting...")
-                }
+                updateStatus("Connecting...")
             } catch (e: Exception) {
                 activeFidoUri = null
                 Log.e("FidoUriHandler", "Error starting session", e)
                 updateStatus("Error: ${e.message}")
             }
         } else if (activeFidoUri == null) {
-            updateStatus("No URI provided. Waiting for FIDO URI intent.\nMake sure you scan a valid FIDO QR code.", resetTerminal = true)
+            updateStatus("Ready to scan FIDO QR code.", resetTerminal = true)
         }
     }
 
