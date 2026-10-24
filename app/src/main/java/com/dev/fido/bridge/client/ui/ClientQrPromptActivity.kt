@@ -57,6 +57,7 @@ class ClientQrPromptActivity : AppCompatActivity() {
     private lateinit var rootScrim: FrameLayout
     private lateinit var titleView: TextView
     private lateinit var qrImageView: ImageView
+    private lateinit var connectedCheckView: TextView
     private lateinit var statusView: TextView
     private lateinit var transportManager: ClientTransportManager
     private lateinit var serviceIntent: Intent
@@ -82,6 +83,12 @@ class ClientQrPromptActivity : AppCompatActivity() {
             onStatusUpdate = { status ->
                 runOnUiThread { statusView.text = status }
             }
+            onPeerConnected = {
+                runOnUiThread {
+                    qrImageView.visibility = View.INVISIBLE
+                    connectedCheckView.visibility = View.VISIBLE
+                }
+            }
         }
 
         buildBottomSheetUi()
@@ -90,13 +97,14 @@ class ClientQrPromptActivity : AppCompatActivity() {
 
     private fun buildBottomSheetUi() {
         titleView = TextView(this).apply {
-            text = "Scan QR Code with Passkey Device"
+            text = "Passkey"
             textSize = 16f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor("#F8FAFC"))
             gravity = Gravity.CENTER
         }
 
+        val qrSize = 230.dp
         val qrPadding = 12.dp
         qrImageView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -108,8 +116,28 @@ class ClientQrPromptActivity : AppCompatActivity() {
             visibility = View.INVISIBLE
         }
 
+        connectedCheckView = TextView(this).apply {
+            text = "✓"
+            textSize = 48f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#10B981"))
+            }
+            visibility = View.GONE
+        }
+
+        // Overlay the connected checkmark badge on the QR frame so the bottom sheet height stays fixed upon connection
+        val qrContainer = FrameLayout(this).apply {
+            addView(qrImageView, FrameLayout.LayoutParams(qrSize, qrSize, Gravity.CENTER))
+            val badgeSize = 96.dp
+            addView(connectedCheckView, FrameLayout.LayoutParams(badgeSize, badgeSize, Gravity.CENTER))
+        }
+
         statusView = TextView(this).apply {
-            text = "Preparing FIDO hybrid session..."
+            text = "Preparing..."
             textSize = 13f
             typeface = Typeface.MONOSPACE
             setTextColor(Color.parseColor("#94A3B8"))
@@ -136,8 +164,7 @@ class ClientQrPromptActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = 20.dp })
 
-            val qrSize = 230.dp
-            addView(qrImageView, LinearLayout.LayoutParams(qrSize, qrSize))
+            addView(qrContainer, LinearLayout.LayoutParams(qrSize, qrSize))
 
             addView(statusView, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -214,7 +241,7 @@ class ClientQrPromptActivity : AppCompatActivity() {
             return
         }
 
-        titleView.text = if (isCreateMode) "Scan to Create Passkey" else "Scan to Sign In with Passkey"
+        titleView.text = if (isCreateMode) "Create Passkey" else "Sign In"
 
         val qrSession = HybridQrGenerator.generateQrSession(prepared.operationHint)
 
@@ -241,7 +268,7 @@ class ClientQrPromptActivity : AppCompatActivity() {
         Thread {
             val qrBitmap = QrBitmapRenderer.render(qrSession.fidoUri, qrSizePx)
             runOnUiThread {
-                if (!isFinishing && !isDestroyed) {
+                if (!isFinishing && !isDestroyed && connectedCheckView.visibility != View.VISIBLE) {
                     qrImageView.setImageBitmap(qrBitmap)
                     qrImageView.visibility = View.VISIBLE
                 }

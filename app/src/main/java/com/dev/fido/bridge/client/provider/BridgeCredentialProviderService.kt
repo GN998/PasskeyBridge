@@ -52,13 +52,13 @@ class BridgeCredentialProviderService : CredentialProviderService() {
                     val rpId = runCatching {
                         JSONObject(option.requestJson).optString("rpId", "")
                     }.getOrDefault("")
-                    val subtitle = if (rpId.isNotEmpty()) "Passkey Bridge • $rpId" else "Passkey Bridge (Hybrid QR)"
+                    val subtitle = rpId.ifEmpty { "Other device" }
 
                     val pendingIntent = buildSelectionPendingIntent(ACTION_CLIENT_GET_PASSKEY)
                     entries.add(
                         PublicKeyCredentialEntry.Builder(
                             context = applicationContext,
-                            username = "Use another device (QR Code)",
+                            username = "Scan QR code",
                             pendingIntent = pendingIntent,
                             beginGetPublicKeyCredentialOption = option
                         )
@@ -87,16 +87,16 @@ class BridgeCredentialProviderService : CredentialProviderService() {
                     JSONObject(request.requestJson).optJSONObject("rp")?.optString("id", "") ?: ""
                 }.getOrDefault("")
                 val description = if (rpId.isNotEmpty()) {
-                    "Save passkey for $rpId on another device via QR code"
+                    "Save to other device • $rpId"
                 } else {
-                    "Save passkey on another device via QR code"
+                    "Save to other device"
                 }
 
                 val icon = Icon.createWithResource(applicationContext, applicationInfo.icon)
                 val pendingIntent = buildSelectionPendingIntent(ACTION_CLIENT_CREATE_PASSKEY)
 
                 val createEntry = CreateEntry.Builder(
-                    accountName = "Use another device (QR Code)",
+                    accountName = "Scan QR code",
                     pendingIntent = pendingIntent
                 )
                     .setDescription(description)

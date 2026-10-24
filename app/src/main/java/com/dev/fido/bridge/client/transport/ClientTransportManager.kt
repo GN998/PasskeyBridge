@@ -35,6 +35,9 @@ class ClientTransportManager(
     @Volatile
     var onStatusUpdate: ((String) -> Unit)? = null
 
+    @Volatile
+    var onPeerConnected: (() -> Unit)? = null
+
     private fun clearActiveSession(ws: ClientTunnelWebsocket?): Boolean = synchronized(this) {
         if (ws == null || activeWebsocket === ws) {
             sessionTimeoutJob?.cancel()
@@ -102,7 +105,7 @@ class ClientTransportManager(
                 return@launch
             }
 
-            onStatusUpdate?.invoke("Waiting for other device to scan QR code...")
+            onStatusUpdate?.invoke("Scan with other device")
 
             // Enforce a 90-second overall ceremony timeout while waiting for QR scan and user verification
             synchronized(this@ClientTransportManager) {
@@ -130,6 +133,8 @@ class ClientTransportManager(
             onError("Authenticator requested unsupported tunnel domain ID: ${advert.encodedTunnelServerDomain}")
             return
         }
+
+        onStatusUpdate?.invoke("Connecting...")
 
         // Derive 32-byte Noise PSK (purpose = 3) using the decrypted 16-byte BLE advert plaintext as salt
         val psk = CryptoHelper.endif(
@@ -175,7 +180,8 @@ class ClientTransportManager(
                 try {
                     if (!noiseSession.isHandshakeComplete) {
                         noiseSession.processServerHello(frame)
-                        onStatusUpdate?.invoke("Encrypted channel established. Waiting for authenticator info...")
+                        onPeerConnected?.invoke()
+                        onStatusUpdate?.invoke("Connected")
                     } else if (awaitingPostHandshake.compareAndSet(true, false)) {
                         val postHandshakeBytes = noiseSession.decrypt(frame)
                         val postMap = CtapCodec.SimpleCbor.read(postHandshakeBytes, strict = false) as? Map<*, *>
@@ -187,9 +193,9 @@ class ClientTransportManager(
                         val supportsBuiltInUv = ClientCtapCodec.extractBuiltInUvSupport(getInfoBytes)
                         val encodedCtapPayload = ClientCtapCodec.encodeRequest(ctapRequest, supportsBuiltInUv)
 
-                        onStatusUpdate?.invoke("Verify identity on the other device...")
-                        // Send framed CTAP command (0x01 = typeCTAP || commandByte || CBOR)
+                        // Send framed CTAP command (0x01 = typeCTAP || commandByte || CBOR) before dispatching UI status update
                         sendEncryptedFrame(byteArrayOf(0x01) + encodedCtapPayload)
+                        onStatusUpdate?.invoke("Verify on other device...")
                     } else {
                         val decrypted = noiseSession.decrypt(frame)
                         require(decrypted.isNotEmpty()) { "Empty transport frame is a protocol error" }
@@ -225,9 +231,7 @@ class ClientTransportManager(
                     }
                 }
             },
-            onStatusUpdate = { status ->
-                if (activeWebsocket === ws) onStatusUpdate?.invoke(status)
-            },
+            onStatusUpdate = null,
             onDisconnected = {
                 if (!completed.get() && clearActiveSession(ws)) {
                     onError("Connection closed before authentication completed.")
