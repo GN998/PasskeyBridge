@@ -7,7 +7,15 @@ import com.dev.fido.bridge.core.ctap.model.Ctap2Response
 import com.dev.fido.bridge.core.security.CryptoUtils
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigInteger
 import java.nio.ByteBuffer
+import java.security.AlgorithmParameters
+import java.security.KeyFactory
+import java.security.spec.ECGenParameterSpec
+import java.security.spec.ECParameterSpec
+import java.security.spec.ECPoint
+import java.security.spec.ECPublicKeySpec
+import java.security.spec.RSAPublicKeySpec
 
 /**
  * Holds the prepared CTAP2 request alongside the synthesized clientDataJSON (when not overridden by a browser's raw clientDataHash).
@@ -72,6 +80,7 @@ object ClientWebAuthnAssembler {
     ): PreparedClientCeremony {
         val json = JSONObject(requestJson)
         val challengeB64 = json.getString("challenge")
+        val attestationPref = json.optString("attestation", "none")
 
         val rpObj = json.getJSONObject("rp")
         val rpId = rpObj.getString("id")
@@ -101,13 +110,10 @@ object ClientWebAuthnAssembler {
         val requireRk = authSel?.optBoolean("requireResidentKey", false) ?: false
         val rk = requireRk || residentKeyStr == "required" || residentKeyStr == "preferred"
         val uvStr = authSel?.optString("userVerification", "preferred") ?: "preferred"
-        val attestationPref = json.optString("attestation", "none").ifEmpty { "none" }
 
-        // Enforce UV when creating a discoverable credential (rk=true) per WebAuthn §5.4.4 and CTAP 2.3 §6.1.2 Step 7.1
-        // so authenticators do not reject rk=true requests with CTAP2_ERR_PUAT_REQUIRED / CTAP2_ERR_OPERATION_DENIED.
         val options = buildMap<String, Boolean> {
             if (rk) put("rk", true)
-            if (rk || uvStr == "required" || uvStr == "preferred") put("uv", true)
+            if (uvStr == "required" || uvStr == "preferred") put("uv", true)
         }
 
         val clientDataBytes = buildClientDataJson(
@@ -170,24 +176,26 @@ object ClientWebAuthnAssembler {
 
     /**
      * Assemble WebAuthn RegistrationResponseJSON string from a CTAP2 MakeCredentialResponse per WebAuthn §5.1.
-     * Strip hardware attestation statements when [attestationPreference] is "none" so Chromium's
-     * CredMan AttestationObject::ParseForResponseFields does not reject non-self-attested responses.
+     * Strip attestation statement and zero out AAGUID when [attestationPreference] is "none" per WebAuthn §5.1.3,
+     * and populate authenticatorData, publicKeyAlgorithm, and SPKI publicKey required by Chromium's MojoClassFromJSON parser.
      */
     fun buildMakeCredentialResponseJson(
         response: Ctap2Response.MakeCredentialResponse,
         clientDataJsonBytes: ByteArray,
         attestationPreference: String = "none"
     ): String {
-        val credentialId = extractCredentialIdFromAuthData(response.authData)
-        val credIdB64 = CryptoUtils.encodeBase64UrlNoPadding(credentialId)
-
         val stripAttestation = attestationPreference == "none"
         val effectiveAuthData = if (stripAttestation && response.authData.size >= 53) {
-            // Zero out the 16-byte AAGUID (offset 37..52) when replacing authenticator attestation with "none"
-            response.authData.copyOf().also { it.fill(0, 37, 53) }
+            response.authData.copyOf().apply {
+                // Zero out the 16-byte AAGUID (bytes 37..52) when attestation conveyance is "none" per WebAuthn §5.1.3
+                java.util.Arrays.fill(this, 37, 53, 0.toByte())
+            }
         } else {
             response.authData
         }
+
+        val parsedAuthData = parseAttestedAuthData(effectiveAuthData)
+        val credIdB64 = CryptoUtils.encodeBase64UrlNoPadding(parsedAuthData.credentialId)
 
         val attestationObjectMap = mapOf(
             "fmt" to if (stripAttestation) "none" else response.fmt,
@@ -203,26 +211,102 @@ object ClientWebAuthnAssembler {
             put("authenticatorAttachment", "cross-platform")
             put("response", JSONObject().apply {
                 put("clientDataJSON", CryptoUtils.encodeBase64UrlNoPadding(clientDataJsonBytes))
+                put("authenticatorData", CryptoUtils.encodeBase64UrlNoPadding(effectiveAuthData))
                 put("attestationObject", CryptoUtils.encodeBase64UrlNoPadding(attestationObjectBytes))
-                put("transports", JSONArray(listOf("hybrid")))
+                put("transports", JSONArray(listOf("hybrid", "internal")))
+                put("publicKeyAlgorithm", parsedAuthData.coseAlgorithm)
+                parsedAuthData.spkiPublicKeyBytes?.let { spki ->
+                    put("publicKey", CryptoUtils.encodeBase64UrlNoPadding(spki))
+                }
             })
             put("clientExtensionResults", JSONObject())
         }.toString()
     }
 
+    private data class ParsedAttestedAuthData(
+        val credentialId: ByteArray,
+        val coseAlgorithm: Long,
+        val spkiPublicKeyBytes: ByteArray?
+    )
+
     /**
-     * Extract credentialId from authenticatorData per WebAuthn §6.1 & §6.5.1:
-     * rpIdHash (32) + flags (1) + signCount (4) + aaguid (16) + credIdLen (2, big-endian) + credentialId (L).
+     * Extract credentialId, COSEAlgorithmIdentifier (key 3), and DER SubjectPublicKeyInfo from authenticatorData
+     * per WebAuthn §6.1 & §6.5.1:
+     * rpIdHash (32) + flags (1) + signCount (4) + aaguid (16) + credIdLen (2, big-endian) + credentialId (L) + credentialPublicKey (CBOR).
      */
-    private fun extractCredentialIdFromAuthData(authData: ByteArray): ByteArray {
-        if (authData.size < 55) return ByteArray(0)
+    private fun parseAttestedAuthData(authData: ByteArray): ParsedAttestedAuthData {
+        if (authData.size < 55) {
+            return ParsedAttestedAuthData(ByteArray(0), -7L, null)
+        }
         val flags = authData[32].toInt() and 0xFF
         val hasAttestedCredData = (flags and 0x40) != 0
-        if (!hasAttestedCredData) return ByteArray(0)
+        if (!hasAttestedCredData) {
+            return ParsedAttestedAuthData(ByteArray(0), -7L, null)
+        }
 
         val credIdLen = ByteBuffer.wrap(authData, 53, 2).short.toInt() and 0xFFFF
-        if (authData.size < 55 + credIdLen) return ByteArray(0)
-        return authData.copyOfRange(55, 55 + credIdLen)
+        val coseKeyOffset = 55 + credIdLen
+        if (authData.size < coseKeyOffset) {
+            return ParsedAttestedAuthData(ByteArray(0), -7L, null)
+        }
+
+        val credentialId = authData.copyOfRange(55, coseKeyOffset)
+        if (authData.size == coseKeyOffset) {
+            return ParsedAttestedAuthData(credentialId, -7L, null)
+        }
+
+        val coseSlice = authData.copyOfRange(coseKeyOffset, authData.size)
+        val coseMap = runCatching {
+            CtapCodec.SimpleCbor.read(coseSlice, strict = false, allowTrailingBytes = true) as? Map<*, *>
+        }.getOrNull()
+
+        val alg = (coseMap?.get(3L) as? Number)?.toLong() ?: -7L
+        val spkiBytes = runCatching { coseMap?.let(::convertCoseKeyToSpki) }.getOrNull()
+
+        return ParsedAttestedAuthData(
+            credentialId = credentialId,
+            coseAlgorithm = alg,
+            spkiPublicKeyBytes = spkiBytes
+        )
+    }
+
+    /**
+     * Convert COSE_Key map into DER-encoded SubjectPublicKeyInfo (SPKI) bytes per WebAuthn §5.2.1.1.
+     */
+    private fun convertCoseKeyToSpki(coseMap: Map<*, *>): ByteArray? {
+        val kty = (coseMap[1L] as? Number)?.toInt() ?: return null
+        return when (kty) {
+            2 -> {
+                // EC2 (P-256 / ES256: crv = 1, x = -2, y = -3)
+                val crv = (coseMap[-1L] as? Number)?.toInt()
+                val xBytes = coseMap[-2L] as? ByteArray ?: return null
+                val yBytes = coseMap[-3L] as? ByteArray ?: return null
+                if (crv != 1 || xBytes.size != 32 || yBytes.size != 32) return null
+
+                val params = AlgorithmParameters.getInstance("EC").apply {
+                    init(ECGenParameterSpec("secp256r1"))
+                }.getParameterSpec(ECParameterSpec::class.java)
+                val point = ECPoint(BigInteger(1, xBytes), BigInteger(1, yBytes))
+                KeyFactory.getInstance("EC")
+                    .generatePublic(ECPublicKeySpec(point, params))
+                    .encoded
+            }
+            1 -> {
+                // OKP (Ed25519 / EdDSA: crv = 6, x = -2) -> RFC 8410 12-byte SPKI header + 32-byte raw key
+                val crv = (coseMap[-1L] as? Number)?.toInt()
+                val xBytes = coseMap[-2L] as? ByteArray ?: return null
+                if (crv != 6 || xBytes.size != 32) return null
+                byteArrayOf(0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65, 0x70, 0x03, 0x21, 0x00) + xBytes
+            }
+            3 -> {
+                // RSA (RS256: n = -1, e = -2)
+                val nBytes = coseMap[-1L] as? ByteArray ?: return null
+                val eBytes = coseMap[-2L] as? ByteArray ?: return null
+                val spec = RSAPublicKeySpec(BigInteger(1, nBytes), BigInteger(1, eBytes))
+                KeyFactory.getInstance("RSA").generatePublic(spec).encoded
+            }
+            else -> null
+        }
     }
 
     private fun buildClientDataJson(
@@ -240,8 +324,7 @@ object ClientWebAuthnAssembler {
                 put("androidPackageName", packageName)
             }
         }
-        // Unescape forward slashes escaped by Android's org.json.JSONStringer to preserve canonical origin formatting
-        return obj.toString().replace("\\/", "/").toByteArray(Charsets.UTF_8)
+        return obj.toString().toByteArray(Charsets.UTF_8)
     }
 
     private fun JSONArray.toDescriptorList(): List<CredentialDescriptor> {
