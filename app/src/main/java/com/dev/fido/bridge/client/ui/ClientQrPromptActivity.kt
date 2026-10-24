@@ -309,7 +309,8 @@ class ClientQrPromptActivity : AppCompatActivity() {
             is Ctap2Response.MakeCredentialResponse -> {
                 val responseJson = ClientWebAuthnAssembler.buildMakeCredentialResponseJson(
                     response = response,
-                    clientDataJsonBytes = prepared.clientDataJsonBytes
+                    clientDataJsonBytes = prepared.clientDataJsonBytes,
+                    attestationPreference = prepared.attestationPreference
                 )
                 val resultIntent = Intent()
                 PendingIntentHandler.setCreateCredentialResponse(

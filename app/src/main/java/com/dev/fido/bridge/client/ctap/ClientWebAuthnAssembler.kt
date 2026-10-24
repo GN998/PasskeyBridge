@@ -15,7 +15,8 @@ import java.nio.ByteBuffer
 data class PreparedClientCeremony(
     val ctapRequest: Ctap2Request,
     val clientDataJsonBytes: ByteArray,
-    val operationHint: String
+    val operationHint: String,
+    val attestationPreference: String = "none"
 )
 
 object ClientWebAuthnAssembler {
@@ -100,10 +101,13 @@ object ClientWebAuthnAssembler {
         val requireRk = authSel?.optBoolean("requireResidentKey", false) ?: false
         val rk = requireRk || residentKeyStr == "required" || residentKeyStr == "preferred"
         val uvStr = authSel?.optString("userVerification", "preferred") ?: "preferred"
+        val attestationPref = json.optString("attestation", "none").ifEmpty { "none" }
 
+        // Enforce UV when creating a discoverable credential (rk=true) per WebAuthn §5.4.4 and CTAP 2.3 §6.1.2 Step 7.1
+        // so authenticators do not reject rk=true requests with CTAP2_ERR_PUAT_REQUIRED / CTAP2_ERR_OPERATION_DENIED.
         val options = buildMap<String, Boolean> {
             if (rk) put("rk", true)
-            if (uvStr == "required" || uvStr == "preferred") put("uv", true)
+            if (rk || uvStr == "required" || uvStr == "preferred") put("uv", true)
         }
 
         val clientDataBytes = buildClientDataJson(
@@ -129,11 +133,12 @@ object ClientWebAuthnAssembler {
         return PreparedClientCeremony(
             ctapRequest = ctapReq,
             clientDataJsonBytes = clientDataBytes,
-            operationHint = "mc"
+            operationHint = "mc",
+            attestationPreference = attestationPref
         )
     }
 
-/**
+    /**
      * Assemble WebAuthn AuthenticationResponseJSON string from a CTAP2 GetAssertionResponse per WebAuthn §5.1.
      */
     fun buildGetAssertionResponseJson(
@@ -165,19 +170,29 @@ object ClientWebAuthnAssembler {
 
     /**
      * Assemble WebAuthn RegistrationResponseJSON string from a CTAP2 MakeCredentialResponse per WebAuthn §5.1.
-     * Extract the newly generated credentialId from authData's attestedCredentialData (offset 53..55 + L).
+     * Strip hardware attestation statements when [attestationPreference] is "none" so Chromium's
+     * CredMan AttestationObject::ParseForResponseFields does not reject non-self-attested responses.
      */
     fun buildMakeCredentialResponseJson(
         response: Ctap2Response.MakeCredentialResponse,
-        clientDataJsonBytes: ByteArray
+        clientDataJsonBytes: ByteArray,
+        attestationPreference: String = "none"
     ): String {
         val credentialId = extractCredentialIdFromAuthData(response.authData)
         val credIdB64 = CryptoUtils.encodeBase64UrlNoPadding(credentialId)
 
+        val stripAttestation = attestationPreference == "none"
+        val effectiveAuthData = if (stripAttestation && response.authData.size >= 53) {
+            // Zero out the 16-byte AAGUID (offset 37..52) when replacing authenticator attestation with "none"
+            response.authData.copyOf().also { it.fill(0, 37, 53) }
+        } else {
+            response.authData
+        }
+
         val attestationObjectMap = mapOf(
-            "fmt" to response.fmt,
-            "authData" to response.authData,
-            "attStmt" to response.attStmt
+            "fmt" to if (stripAttestation) "none" else response.fmt,
+            "authData" to effectiveAuthData,
+            "attStmt" to if (stripAttestation) emptyMap<Any, Any>() else response.attStmt
         )
         val attestationObjectBytes = CtapCodec.SimpleCbor.write(attestationObjectMap)
 
@@ -189,7 +204,7 @@ object ClientWebAuthnAssembler {
             put("response", JSONObject().apply {
                 put("clientDataJSON", CryptoUtils.encodeBase64UrlNoPadding(clientDataJsonBytes))
                 put("attestationObject", CryptoUtils.encodeBase64UrlNoPadding(attestationObjectBytes))
-                put("transports", JSONArray(listOf("hybrid", "internal")))
+                put("transports", JSONArray(listOf("hybrid")))
             })
             put("clientExtensionResults", JSONObject())
         }.toString()
@@ -225,7 +240,8 @@ object ClientWebAuthnAssembler {
                 put("androidPackageName", packageName)
             }
         }
-        return obj.toString().toByteArray(Charsets.UTF_8)
+        // Unescape forward slashes escaped by Android's org.json.JSONStringer to preserve canonical origin formatting
+        return obj.toString().replace("\\/", "/").toByteArray(Charsets.UTF_8)
     }
 
     private fun JSONArray.toDescriptorList(): List<CredentialDescriptor> {
