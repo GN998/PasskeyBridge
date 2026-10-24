@@ -43,6 +43,12 @@ class BridgeCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginGetCredentialResponse, GetCredentialException>
     ) {
+        // Prevent self-looping when the local Authenticator mode invokes CredentialManager on the same device.
+        if (request.callingAppInfo?.packageName == packageName) {
+            callback.onResult(BeginGetCredentialResponse())
+            return
+        }
+
         try {
             val entries = mutableListOf<CredentialEntry>()
             val icon = Icon.createWithResource(applicationContext, applicationInfo.icon)
@@ -81,6 +87,12 @@ class BridgeCredentialProviderService : CredentialProviderService() {
         cancellationSignal: CancellationSignal,
         callback: OutcomeReceiver<BeginCreateCredentialResponse, CreateCredentialException>
     ) {
+        // Prevent self-looping when the local Authenticator mode invokes CredentialManager on the same device.
+        if (request.callingAppInfo?.packageName == packageName) {
+            callback.onResult(BeginCreateCredentialResponse())
+            return
+        }
+
         try {
             if (request is BeginCreatePublicKeyCredentialRequest) {
                 val rpId = runCatching {

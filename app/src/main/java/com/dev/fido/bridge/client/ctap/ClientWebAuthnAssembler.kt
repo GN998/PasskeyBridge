@@ -176,7 +176,7 @@ object ClientWebAuthnAssembler {
 
     /**
      * Assemble WebAuthn RegistrationResponseJSON string from a CTAP2 MakeCredentialResponse per WebAuthn §5.1.
-     * Strip attestation statement and zero out AAGUID when [attestationPreference] is "none" per WebAuthn §5.1.3,
+     * Strip attestation statement while retaining the 16-byte AAGUID when [attestationPreference] is "none" per WebAuthn Level 3 §5.1.3,
      * and populate authenticatorData, publicKeyAlgorithm, and SPKI publicKey required by Chromium's MojoClassFromJSON parser.
      */
     fun buildMakeCredentialResponseJson(
@@ -185,14 +185,8 @@ object ClientWebAuthnAssembler {
         attestationPreference: String = "none"
     ): String {
         val stripAttestation = attestationPreference == "none"
-        val effectiveAuthData = if (stripAttestation && response.authData.size >= 53) {
-            response.authData.copyOf().apply {
-                // Zero out the 16-byte AAGUID (bytes 37..52) when attestation conveyance is "none" per WebAuthn §5.1.3
-                java.util.Arrays.fill(this, 37, 53, 0.toByte())
-            }
-        } else {
-            response.authData
-        }
+        // Retain the 16-byte AAGUID in authData when attestation conveyance is "none" per WebAuthn Level 3 §5.1.3.
+        val effectiveAuthData = response.authData
 
         val parsedAuthData = parseAttestedAuthData(effectiveAuthData)
         val credIdB64 = CryptoUtils.encodeBase64UrlNoPadding(parsedAuthData.credentialId)
@@ -277,14 +271,21 @@ object ClientWebAuthnAssembler {
         val kty = (coseMap[1L] as? Number)?.toInt() ?: return null
         return when (kty) {
             2 -> {
-                // EC2 (P-256 / ES256: crv = 1, x = -2, y = -3)
-                val crv = (coseMap[-1L] as? Number)?.toInt()
+                // EC2 uncompressed public keys per WebAuthn §5.8.5:
+                // crv 1 = P-256 (32B), crv 2 = P-384 (48B), crv 3 = P-521 (66B)
+                val crv = (coseMap[-1L] as? Number)?.toInt() ?: return null
                 val xBytes = coseMap[-2L] as? ByteArray ?: return null
                 val yBytes = coseMap[-3L] as? ByteArray ?: return null
-                if (crv != 1 || xBytes.size != 32 || yBytes.size != 32) return null
+                val (curveName, coordLen) = when (crv) {
+                    1 -> "secp256r1" to 32
+                    2 -> "secp384r1" to 48
+                    3 -> "secp521r1" to 66
+                    else -> return null
+                }
+                if (xBytes.size != coordLen || yBytes.size != coordLen) return null
 
                 val params = AlgorithmParameters.getInstance("EC").apply {
-                    init(ECGenParameterSpec("secp256r1"))
+                    init(ECGenParameterSpec(curveName))
                 }.getParameterSpec(ECParameterSpec::class.java)
                 val point = ECPoint(BigInteger(1, xBytes), BigInteger(1, yBytes))
                 KeyFactory.getInstance("EC")
